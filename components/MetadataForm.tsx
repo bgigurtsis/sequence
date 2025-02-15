@@ -1,45 +1,55 @@
 'use client';
 
 import React, { useState } from 'react';
+import PerformerChipsInput from './PerformerChipsInput';
 
 interface MetadataFormProps {
   onSave: (metadata: {
     title: string;
-    date: string;
     time: string;
     performers: string[];
     notes?: string;
     sectionId: string;
+    tags: string[];
   }) => void;
   onCancel: () => void;
   sections: { id: string; title: string }[];
   initialValues?: {
     title?: string;
-    date?: string;
     time?: string;
-    performers?: string;
+    performers?: string[];
     notes?: string;
     sectionId?: string;
+    tags?: string[];
   };
+  availablePerformers?: string[];
+  onDelete?: () => void;
 }
 
-const MetadataForm: React.FC<MetadataFormProps> = ({ onSave, onCancel, sections, initialValues = {} }) => {
+const MetadataForm: React.FC<MetadataFormProps> = ({
+  onSave,
+  onCancel,
+  sections,
+  initialValues = {},
+  availablePerformers = [],
+  onDelete,
+}) => {
   const [title, setTitle] = useState(initialValues.title || '');
-  const [date, setDate] = useState(initialValues.date || new Date().toISOString().split('T')[0]);
   const [time, setTime] = useState(initialValues.time || new Date().toTimeString().split(' ')[0]);
-  const [performers, setPerformers] = useState(initialValues.performers || '');
+  const [performers, setPerformers] = useState<string[]>(initialValues.performers || []);
   const [notes, setNotes] = useState(initialValues.notes || '');
   const [sectionId, setSectionId] = useState(initialValues.sectionId || (sections[0]?.id || ''));
+  const [tags, setTags] = useState<string[]>(initialValues.tags || []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave({
       title,
-      date,
       time,
-      performers: performers.split(',').map(p => p.trim()),
+      performers,
       notes,
       sectionId,
+      tags,
     });
   };
 
@@ -56,16 +66,6 @@ const MetadataForm: React.FC<MetadataFormProps> = ({ onSave, onCancel, sections,
         />
       </div>
       <div>
-        <label className="block text-sm font-medium">Date</label>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-          className="border p-2 rounded w-full"
-          required
-        />
-      </div>
-      <div>
         <label className="block text-sm font-medium">Time</label>
         <input
           type="time"
@@ -76,13 +76,17 @@ const MetadataForm: React.FC<MetadataFormProps> = ({ onSave, onCancel, sections,
         />
       </div>
       <div>
-        <label className="block text-sm font-medium">Performers (comma separated)</label>
-        <input
-          type="text"
+        <label className="block text-sm font-medium">Performers</label>
+        <PerformerChipsInput
           value={performers}
-          onChange={(e) => setPerformers(e.target.value)}
-          className="border p-2 rounded w-full"
+          onChange={setPerformers}
+          placeholder="Select performers..."
         />
+        {availablePerformers.length > 0 && (
+          <div className="mt-2 text-sm text-gray-500">
+            Available: {availablePerformers.join(', ')}
+          </div>
+        )}
       </div>
       <div>
         <label className="block text-sm font-medium">Notes</label>
@@ -105,7 +109,20 @@ const MetadataForm: React.FC<MetadataFormProps> = ({ onSave, onCancel, sections,
           ))}
         </select>
       </div>
+      <div>
+        <label className="block text-sm font-medium">Tags</label>
+        <PerformerChipsInput
+          value={tags}
+          onChange={setTags}
+          placeholder="Add a tag..."
+        />
+      </div>
       <div className="flex justify-end space-x-4">
+        {onDelete && (
+          <button type="button" onClick={onDelete} className="px-4 py-2 bg-red-500 text-white rounded">
+            Delete
+          </button>
+        )}
         <button type="button" onClick={onCancel} className="px-4 py-2 bg-gray-300 rounded">
           Cancel
         </button>

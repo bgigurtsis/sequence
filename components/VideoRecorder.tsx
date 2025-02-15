@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Camera, Square } from 'lucide-react';
+import { Camera, Square, Pause, Play } from 'lucide-react';
 
 type VideoRecorderProps = {
   onRecordingComplete: (data: { videoBlob: Blob; thumbnail: string }) => void;
@@ -7,6 +7,7 @@ type VideoRecorderProps = {
 
 const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) => {
   const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [thumbnail, setThumbnail] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -42,6 +43,7 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
       
       mediaRecorder.start();
       setIsRecording(true);
+      setIsPaused(false);
     } catch (err) {
       console.error('Error accessing camera:', err);
     }
@@ -51,6 +53,21 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
     mediaRecorderRef.current?.stop();
     streamRef.current?.getTracks().forEach(track => track.stop());
     setIsRecording(false);
+    setIsPaused(false);
+  };
+
+  const pauseRecording = () => {
+    if (mediaRecorderRef.current && isRecording && !isPaused) {
+      mediaRecorderRef.current.pause();
+      setIsPaused(true);
+    }
+  };
+
+  const resumeRecording = () => {
+    if (mediaRecorderRef.current && isRecording && isPaused) {
+      mediaRecorderRef.current.resume();
+      setIsPaused(false);
+    }
   };
 
   const generateThumbnail = (videoChunks: Blob[]) => {
@@ -110,15 +127,34 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
             Start Recording
           </button>
         )}
-        
+
         {isRecording && (
-          <button
-            onClick={stopRecording}
-            className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg"
-          >
-            <Square className="mr-2" size={20} />
-            Stop Recording
-          </button>
+          <>
+            {!isPaused ? (
+              <button
+                onClick={pauseRecording}
+                className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg"
+              >
+                <Pause className="mr-2" size={20} />
+                Pause Recording
+              </button>
+            ) : (
+              <button
+                onClick={resumeRecording}
+                className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg"
+              >
+                <Play className="mr-2" size={20} />
+                Resume Recording
+              </button>
+            )}
+            <button
+              onClick={stopRecording}
+              className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg"
+            >
+              <Square className="mr-2" size={20} />
+              Stop Recording
+            </button>
+          </>
         )}
       </div>
     </div>

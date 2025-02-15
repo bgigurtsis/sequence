@@ -1,22 +1,24 @@
 'use client';
 
 import React, { useState } from 'react';
+import PerformerChipsInput from './PerformerChipsInput';
 
 interface PerformanceFormProps {
-  onSave: (performance: { id?: string; title: string; defaultPerformers: string[] }) => void;
+  onSave: (performance: { title: string; defaultPerformers: string[] }) => void;
   onCancel: () => void;
   initialData?: { title?: string; defaultPerformers?: string[] };
+  onDelete?: () => void;
 }
 
-const PerformanceForm: React.FC<PerformanceFormProps> = ({ onSave, onCancel, initialData = {} }) => {
+const PerformanceForm: React.FC<PerformanceFormProps> = ({ onSave, onCancel, initialData = {}, onDelete }) => {
   const [title, setTitle] = useState(initialData.title || '');
-  const [defaultPerformers, setDefaultPerformers] = useState((initialData.defaultPerformers || []).join(', '));
+  const [defaultPerformers, setDefaultPerformers] = useState<string[]>(initialData.defaultPerformers || []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave({
       title,
-      defaultPerformers: defaultPerformers.split(',').map(p => p.trim()).filter(Boolean),
+      defaultPerformers,
     });
   };
 
@@ -33,15 +35,19 @@ const PerformanceForm: React.FC<PerformanceFormProps> = ({ onSave, onCancel, ini
         />
       </div>
       <div>
-        <label className="block text-sm font-medium">Default Performers (comma separated)</label>
-        <input
-          type="text"
+        <label className="block text-sm font-medium">Default Performers</label>
+        <PerformerChipsInput
           value={defaultPerformers}
-          onChange={(e) => setDefaultPerformers(e.target.value)}
-          className="border p-2 rounded w-full"
+          onChange={setDefaultPerformers}
+          placeholder="Add a performer..."
         />
       </div>
       <div className="flex justify-end space-x-4">
+        {onDelete && (
+          <button type="button" onClick={onDelete} className="px-4 py-2 bg-red-500 text-white rounded">
+            Delete
+          </button>
+        )}
         <button type="button" onClick={onCancel} className="px-4 py-2 bg-gray-300 rounded">
           Cancel
         </button>
