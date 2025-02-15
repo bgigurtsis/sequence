@@ -1,0 +1,21 @@
+{
+  "name": "dance-rehearsal-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "tailwindcss": "^3.0.0",
+    "lucide-react": "^0.162.0",
+    "@radix-ui/react-dialog": "^1.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^4.0.0"
+  }
+}
