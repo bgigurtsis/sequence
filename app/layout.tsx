@@ -1,9 +1,6 @@
-// app/layout.tsx
 import './globals.css';
 import { ReactNode } from 'react';
-import dynamic from 'next/dynamic';
-
-const ClerkProviderWrapper = dynamic(() => import('../components/ClerkProviderWrapper'), { ssr: false });
+import ClientClerkProviderWrapper from '../components/ClientClerkProviderWrapper';
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
@@ -12,7 +9,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <title>Dance Rehearsal App</title>
       </head>
       <body>
-        <ClerkProviderWrapper>{children}</ClerkProviderWrapper>
+        <ClientClerkProviderWrapper>{children}</ClientClerkProviderWrapper>
       </body>
     </html>
   );
