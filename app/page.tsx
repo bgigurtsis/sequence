@@ -2,13 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  SignedIn,
-  SignedOut,
-  RedirectToSignIn,
-  UserButton,
-  useUser,
-} from '@clerk/nextjs';
+import { RedirectToSignIn, UserButton, useUser } from '@clerk/nextjs';
 import VideoRecorder from '../components/VideoRecorder';
 import MetadataForm from '../components/MetadataForm';
 import VideoPlayer from '../components/VideoPlayer';
@@ -33,6 +27,11 @@ type Metadata = {
 export default function HomePage() {
   const router = useRouter();
   const { user } = useUser();
+
+  // If no user is signed in, redirect them to sign in.
+  if (!user) {
+    return <RedirectToSignIn />;
+  }
 
   const [performances, setPerformances] = useState<Performance[]>([]);
   const [selectedPerformanceId, setSelectedPerformanceId] = useState<string>('');
@@ -127,7 +126,7 @@ export default function HomePage() {
     setShowPerformanceForm(false);
   };
 
-  // Handle saving metadata for a recording.
+  // Save recording metadata.
   const handleMetadataSave = (metadata: Metadata) => {
     if (editingRecording) {
       const updatedPerformances = performances.map((perf) => {
@@ -187,7 +186,7 @@ export default function HomePage() {
     setShowMetadataForm(true);
   };
 
-  // Fix for old videos: only call createObjectURL if videoBlob is a Blob.
+  // Fix for older videos: only call createObjectURL if videoBlob is a Blob.
   const handleWatchRecording = (sectionId: string, recording: Recording) => {
     let videoUrl;
     if (recording.videoBlob instanceof Blob) {
@@ -282,157 +281,152 @@ export default function HomePage() {
 
   return (
     <div className="p-4">
-      <SignedOut>
-        <RedirectToSignIn />
-      </SignedOut>
-      <SignedIn>
-        <header className="flex justify-between items-center p-4 bg-gray-200">
-          <h1 className="text-2xl font-bold">Dance Rehearsal App</h1>
-          <UserButton />
-        </header>
-        <div className="mt-4">
-          {/* Search Bar */}
-          <div className="mb-4">
-            <input
-              type="text"
-              placeholder="Search recordings by title, performers, or tags..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="border p-2 rounded w-full"
-            />
-          </div>
+      {/* Header with profile */}
+      <header className="flex justify-between items-center p-4 bg-gray-200">
+        <h1 className="text-2xl font-bold">Dance Rehearsal App</h1>
+        <UserButton />
+      </header>
 
-          {/* Top Controls */}
-          <div className="flex justify-between mb-4">
-            <div>
-              <button
-                onClick={() => setShowPerformanceForm(true)}
-                className="bg-purple-500 text-white px-4 py-2 rounded"
-              >
-                New Performance
-              </button>
-            </div>
-          </div>
+      {/* Search Bar */}
+      <div className="mb-4 mt-4">
+        <input
+          type="text"
+          placeholder="Search recordings by title, performers, or tags..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="border p-2 rounded w-full"
+        />
+      </div>
 
-          {/* Timeline */}
-          {selectedPerformance ? (
-            <RehearsalTimeline
-              performance={selectedPerformance}
-              performances={performances}
-              searchQuery={searchQuery}
-              onSelectPerformance={(id) => setSelectedPerformanceId(id)}
-              onWatchRecording={handleWatchRecording}
-              onEditRecording={handleEditRecording}
-              onEditSection={handleEditSection}
-              onNewSection={() => setShowSectionForm(true)}
-              onEditPerformance={handleEditPerformance}
-              onRecordSection={handleRecordSection}
-            />
-          ) : (
-            <div className="text-center">Select a performance to view details.</div>
-          )}
+      {/* Top Controls */}
+      <div className="flex justify-between mb-4">
+        <div>
+          <button
+            onClick={() => setShowPerformanceForm(true)}
+            className="bg-purple-500 text-white px-4 py-2 rounded"
+          >
+            New Performance
+          </button>
         </div>
+      </div>
 
-        {/* Video Recorder Modal */}
-        {showRecorder && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-            <div className="bg-white p-4 rounded shadow-lg">
-              <VideoRecorder onRecordingComplete={handleRecordingComplete} />
-              <button
-                onClick={() => {
-                  setShowRecorder(false);
-                  setRecordingTargetSectionId(null);
-                }}
-                className="mt-2 text-red-500"
-              >
-                Cancel
-              </button>
-            </div>
+      {/* Timeline */}
+      {selectedPerformance ? (
+        <RehearsalTimeline
+          performance={selectedPerformance}
+          performances={performances}
+          searchQuery={searchQuery}
+          onSelectPerformance={(id) => setSelectedPerformanceId(id)}
+          onWatchRecording={handleWatchRecording}
+          onEditRecording={handleEditRecording}
+          onEditSection={handleEditSection}
+          onNewSection={() => setShowSectionForm(true)}
+          onEditPerformance={handleEditPerformance}
+          onRecordSection={handleRecordSection}
+        />
+      ) : (
+        <div className="text-center">Select a performance to view details.</div>
+      )}
+
+      {/* Video Recorder Modal */}
+      {showRecorder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="bg-white p-4 rounded shadow-lg">
+            <VideoRecorder onRecordingComplete={handleRecordingComplete} />
+            <button
+              onClick={() => {
+                setShowRecorder(false);
+                setRecordingTargetSectionId(null);
+              }}
+              className="mt-2 text-red-500"
+            >
+              Cancel
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Metadata Form Modal for New/Editing Recording */}
-        {showMetadataForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-            <div className="bg-white p-4 rounded shadow-lg">
-              <MetadataForm
-                onSave={handleMetadataSave}
-                onCancel={() => {
-                  setShowMetadataForm(false);
-                  setEditingRecording(null);
-                  setRecordingTargetSectionId(null);
-                }}
-                sections={sectionsForMetadata}
-                availablePerformers={selectedPerformance ? selectedPerformance.defaultPerformers : []}
-                initialValues={
-                  editingRecording
-                    ? {
-                        title: editingRecording.recording.title,
-                        time: editingRecording.recording.time,
-                        performers: editingRecording.recording.performers,
-                        notes: editingRecording.recording.notes,
-                        sectionId: editingRecording.sectionId,
-                        tags: editingRecording.recording.tags,
-                      }
-                    : { sectionId: recordingTargetSectionId || '' }
-                }
-                onDelete={editingRecording ? handleDeleteRecordingFromEdit : undefined}
-              />
-            </div>
+      {/* Metadata Form Modal for New/Editing Recording */}
+      {showMetadataForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="bg-white p-4 rounded shadow-lg">
+            <MetadataForm
+              onSave={handleMetadataSave}
+              onCancel={() => {
+                setShowMetadataForm(false);
+                setEditingRecording(null);
+                setRecordingTargetSectionId(null);
+              }}
+              sections={sectionsForMetadata}
+              availablePerformers={selectedPerformance ? selectedPerformance.defaultPerformers : []}
+              initialValues={
+                editingRecording
+                  ? {
+                      title: editingRecording.recording.title,
+                      time: editingRecording.recording.time,
+                      performers: editingRecording.recording.performers,
+                      notes: editingRecording.recording.notes,
+                      sectionId: editingRecording.sectionId,
+                      tags: editingRecording.recording.tags,
+                    }
+                  : { sectionId: recordingTargetSectionId || '' }
+              }
+              onDelete={editingRecording ? handleDeleteRecordingFromEdit : undefined}
+            />
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Performance Form Modal */}
-        {showPerformanceForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-            <div className="bg-white p-4 rounded shadow-lg">
-              <PerformanceForm
-                onSave={editingPerformance ? handleEditPerformanceSave : handleNewPerformanceSave}
-                onCancel={() => {
-                  setShowPerformanceForm(false);
-                  setEditingPerformance(null);
-                }}
-                initialData={
-                  editingPerformance
-                    ? { title: editingPerformance.title, defaultPerformers: editingPerformance.defaultPerformers }
-                    : {}
-                }
-                onDelete={editingPerformance ? () => handleDeletePerformanceFromEdit(editingPerformance.id) : undefined}
-              />
-            </div>
+      {/* Performance Form Modal */}
+      {showPerformanceForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="bg-white p-4 rounded shadow-lg">
+            <PerformanceForm
+              onSave={editingPerformance ? handleEditPerformanceSave : handleNewPerformanceSave}
+              onCancel={() => {
+                setShowPerformanceForm(false);
+                setEditingPerformance(null);
+              }}
+              initialData={
+                editingPerformance
+                  ? { title: editingPerformance.title, defaultPerformers: editingPerformance.defaultPerformers }
+                  : {}
+              }
+              onDelete={editingPerformance ? () => handleDeletePerformanceFromEdit(editingPerformance.id) : undefined}
+            />
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Section Form Modal */}
-        {showSectionForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-            <div className="bg-white p-4 rounded shadow-lg">
-              <SectionForm
-                onSave={editingSection ? handleEditSectionSave : handleNewSectionSave}
-                onCancel={() => {
-                  setShowSectionForm(false);
-                  setEditingSection(null);
-                }}
-                initialData={
-                  editingSection
-                    ? {
-                        title: editingSection.section.title,
-                        location: editingSection.section.location,
-                        date: editingSection.section.date,
-                      }
-                    : {}
-                }
-                onDelete={editingSection ? handleDeleteSectionFromEdit : undefined}
-              />
-            </div>
+      {/* Section Form Modal */}
+      {showSectionForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="bg-white p-4 rounded shadow-lg">
+            <SectionForm
+              onSave={editingSection ? handleEditSectionSave : handleNewSectionSave}
+              onCancel={() => {
+                setShowSectionForm(false);
+                setEditingSection(null);
+              }}
+              initialData={
+                editingSection
+                  ? {
+                      title: editingSection.section.title,
+                      location: editingSection.section.location,
+                      date: editingSection.section.date,
+                    }
+                  : {}
+              }
+              onDelete={editingSection ? handleDeleteSectionFromEdit : undefined}
+            />
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Video Player Modal */}
-        {videoToWatch && (
-          <VideoPlayer videoUrl={videoToWatch.videoUrl} onClose={() => setVideoToWatch(null)} />
-        )}
-      </SignedIn>
+      {/* Video Player Modal */}
+      {videoToWatch && (
+        <VideoPlayer videoUrl={videoToWatch.videoUrl} onClose={() => setVideoToWatch(null)} />
+      )}
     </div>
   );
 }
