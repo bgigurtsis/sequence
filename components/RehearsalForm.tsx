@@ -10,14 +10,14 @@ function getTodayFormatted() {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-interface SectionFormProps {
-  onSave: (section: { title: string; location: string; date: string }) => void;
+interface RehearsalFormProps {
+  onSave: (rehearsal: { title: string; location: string; date: string }) => void;
   onCancel: () => void;
   initialData?: { title?: string; location?: string; date?: string };
   onDelete?: () => void;
 }
 
-const SectionForm: React.FC<SectionFormProps> = ({ onSave, onCancel, initialData = {}, onDelete }) => {
+const RehearsalForm: React.FC<RehearsalFormProps> = ({ onSave, onCancel, initialData = {}, onDelete }) => {
   const [title, setTitle] = useState(initialData.title || '');
   const [location, setLocation] = useState(initialData.location || '');
   const [date, setDate] = useState(initialData.date || getTodayFormatted());
@@ -76,4 +76,4 @@ const SectionForm: React.FC<SectionFormProps> = ({ onSave, onCancel, initialData
   );
 };
 
-export default SectionForm;
+export default RehearsalForm;

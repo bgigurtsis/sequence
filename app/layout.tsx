@@ -6,7 +6,7 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'studiovault',
+  title: 'StageVault',
   description: 'Record and manage your dance rehearsals',
 };
 
@@ -19,7 +19,6 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en">
         <body className={inter.className}>
-          {/* Removed the header here */}
           {children}
         </body>
       </html>

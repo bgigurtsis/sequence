@@ -9,12 +9,12 @@ export interface Recording {
   time: string;
   performers: string[];
   notes?: string;
-  videoBlob: Blob;
+  videoUrl: string;
   thumbnailUrl: string;
   tags: string[];
 }
 
-export interface Section {
+export interface Rehearsal {
   id: string;
   title: string;
   location: string;
@@ -26,7 +26,7 @@ export interface Performance {
   id: string;
   title: string;
   defaultPerformers: string[];
-  sections: Section[];
+  rehearsals: Rehearsal[];
 }
 
 interface RehearsalTimelineProps {
@@ -34,12 +34,12 @@ interface RehearsalTimelineProps {
   performances: Performance[];
   searchQuery: string;
   onSelectPerformance: (performanceId: string) => void;
-  onWatchRecording: (sectionId: string, recording: Recording) => void;
-  onEditRecording: (sectionId: string, recording: Recording) => void;
-  onEditSection: (section: Section) => void;
-  onNewSection: () => void;
+  onWatchRecording: (rehearsalId: string, recording: Recording) => void;
+  onEditRecording: (rehearsalId: string, recording: Recording) => void;
+  onEditRehearsal: (rehearsal: Rehearsal) => void;
+  onNewRehearsal: () => void;
   onEditPerformance: (performance: Performance) => void;
-  onRecordSection: (sectionId: string) => void;
+  onRecordRehearsal: (rehearsalId: string) => void;
 }
 
 const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
@@ -49,12 +49,12 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
   onSelectPerformance,
   onWatchRecording,
   onEditRecording,
-  onEditSection,
-  onNewSection,
+  onEditRehearsal,
+  onNewRehearsal,
   onEditPerformance,
-  onRecordSection,
+  onRecordRehearsal,
 }) => {
-  // Function to check if a recording matches the search query.
+  // Function to check if a recording matches the search query
   const matchesSearch = (recording: Recording, query: string) => {
     if (!query) return true;
     const q = query.toLowerCase();
@@ -64,6 +64,17 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
       (recording.tags && recording.tags.join(' ').toLowerCase().includes(q))
     );
   };
+
+  // Add null check for performance and rehearsals
+  if (!performance || !performance.rehearsals) {
+    return (
+      <div className="p-4 max-w-4xl mx-auto">
+        <div className="text-center text-gray-600">
+          No performance data available.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 max-w-4xl mx-auto">
@@ -85,34 +96,34 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
             <Pencil size={16} />
           </button>
         </div>
-        <button onClick={onNewSection} className="bg-green-500 text-white px-4 py-2 rounded">
+        <button onClick={onNewRehearsal} className="bg-green-500 text-white px-4 py-2 rounded">
           New Rehearsal
         </button>
       </div>
 
-      {/* Sections */}
-      {performance.sections.length === 0 ? (
+      {/* Rehearsals */}
+      {performance.rehearsals.length === 0 ? (
         <div className="text-center text-gray-600">
           No rehearsals found. Create a new rehearsal.
         </div>
       ) : (
-        performance.sections.map((section) => {
-          const filteredRecordings = section.recordings.filter(r => matchesSearch(r, searchQuery));
+        performance.rehearsals.map((rehearsal) => {
+          const filteredRecordings = rehearsal.recordings.filter(r => matchesSearch(r, searchQuery));
           return (
-            <div key={section.id} className="border rounded-lg p-4 mb-4 shadow-sm">
+            <div key={rehearsal.id} className="border rounded-lg p-4 mb-4 shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center space-x-2">
                   <Calendar size={20} />
-                  <span className="font-medium text-xl">{section.title}</span>
+                  <span className="font-medium text-xl">{rehearsal.title}</span>
                   <span className="text-sm text-gray-500">
-                    ({section.location} on {section.date})
+                    ({rehearsal.location} on {rehearsal.date})
                   </span>
-                  <button onClick={() => onEditSection(section)} className="text-blue-500">
+                  <button onClick={() => onEditRehearsal(rehearsal)} className="text-blue-500">
                     <Pencil size={16} />
                   </button>
                 </div>
                 <button
-                  onClick={() => onRecordSection(section.id)}
+                  onClick={() => onRecordRehearsal(rehearsal.id)}
                   className="bg-blue-500 text-white px-3 py-1 rounded shadow"
                 >
                   Record
@@ -153,11 +164,11 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
                         )}
                       </div>
                       <div className="flex items-center space-x-2">
-                        <button onClick={() => onEditRecording(section.id, recording)} className="text-blue-500">
+                        <button onClick={() => onEditRecording(rehearsal.id, recording)} className="text-blue-500">
                           <Pencil size={16} />
                         </button>
                         <button
-                          onClick={() => onWatchRecording(section.id, recording)}
+                          onClick={() => onWatchRecording(rehearsal.id, recording)}
                           className="px-3 py-1 bg-blue-100 rounded-full text-sm"
                         >
                           Watch

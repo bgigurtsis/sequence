@@ -9,17 +9,17 @@ interface MetadataFormProps {
     time: string;
     performers: string[];
     notes?: string;
-    sectionId: string;
+    rehearsalId: string;
     tags: string[];
   }) => void;
   onCancel: () => void;
-  sections: { id: string; title: string }[];
+  rehearsals: { id: string; title: string }[];
   initialValues?: {
     title?: string;
     time?: string;
     performers?: string[];
     notes?: string;
-    sectionId?: string;
+    rehearsalId?: string;
     tags?: string[];
   };
   availablePerformers?: string[];
@@ -29,7 +29,7 @@ interface MetadataFormProps {
 const MetadataForm: React.FC<MetadataFormProps> = ({
   onSave,
   onCancel,
-  sections,
+  rehearsals,
   initialValues = {},
   availablePerformers = [],
   onDelete,
@@ -38,7 +38,7 @@ const MetadataForm: React.FC<MetadataFormProps> = ({
   const [time, setTime] = useState(initialValues.time || new Date().toTimeString().split(' ')[0]);
   const [performers, setPerformers] = useState<string[]>(initialValues.performers || []);
   const [notes, setNotes] = useState(initialValues.notes || '');
-  const [sectionId, setSectionId] = useState(initialValues.sectionId || (sections[0]?.id || ''));
+  const [rehearsalId, setRehearsalId] = useState(initialValues.rehearsalId || (rehearsals[0]?.id || ''));
   const [tags, setTags] = useState<string[]>(initialValues.tags || []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -48,7 +48,7 @@ const MetadataForm: React.FC<MetadataFormProps> = ({
       time,
       performers,
       notes,
-      sectionId,
+      rehearsalId,
       tags,
     });
   };
@@ -97,15 +97,15 @@ const MetadataForm: React.FC<MetadataFormProps> = ({
         />
       </div>
       <div>
-        <label className="block text-sm font-medium">Section</label>
+        <label className="block text-sm font-medium">Rehearsal</label>
         <select
-          value={sectionId}
-          onChange={(e) => setSectionId(e.target.value)}
+          value={rehearsalId}
+          onChange={(e) => setRehearsalId(e.target.value)}
           className="border p-2 rounded w-full"
           required
         >
-          {sections.map(section => (
-            <option key={section.id} value={section.id}>{section.title}</option>
+          {rehearsals.map(rehearsal => (
+            <option key={rehearsal.id} value={rehearsal.id}>{rehearsal.title}</option>
           ))}
         </select>
       </div>

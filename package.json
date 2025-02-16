@@ -10,6 +10,8 @@
   "dependencies": {
     "@clerk/nextjs": "latest",
     "@radix-ui/react-dialog": "^1.0.0",
+    "formidable": "^3.5.2",
+    "googleapis": "^144.0.0",
     "lucide-react": "^0.162.0",
     "next": "latest",
     "react": "^18.2.0",
@@ -17,6 +19,7 @@
     "tailwindcss": "^3.0.0"
   },
   "devDependencies": {
+    "@types/formidable": "^3.4.5",
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.3",

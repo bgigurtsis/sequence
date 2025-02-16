@@ -16,20 +16,20 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' }, 
-        audio: true 
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: true,
       });
-      
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play(); // Ensure live preview starts
+        videoRef.current.play();
       }
-      
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      
+
       const chunks: Blob[] = [];
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -40,7 +40,7 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
         setRecordedChunks(chunks);
         generateThumbnail(chunks);
       };
-      
+
       mediaRecorder.start();
       setIsRecording(true);
       setIsPaused(false);
@@ -51,7 +51,7 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
 
   const stopRecording = () => {
     mediaRecorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach(track => track.stop());
+    streamRef.current?.getTracks().forEach((track) => track.stop());
     setIsRecording(false);
     setIsPaused(false);
   };
@@ -74,44 +74,47 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
     const blob = new Blob(videoChunks, { type: 'video/mp4' });
     const videoUrl = URL.createObjectURL(blob);
     const videoElement = document.createElement('video');
-    
     videoElement.src = videoUrl;
-    videoElement.currentTime = 1; // Capture frame at 1 second
-    
-    videoElement.onloadeddata = () => {
+    videoElement.muted = true;
+    videoElement.playsInline = true;
+
+    videoElement.addEventListener('loadedmetadata', () => {
+      // If the video is shorter than 1 second, use half its duration.
+      const seekTime = videoElement.duration < 1 ? videoElement.duration / 2 : 1;
+      videoElement.currentTime = seekTime;
+    });
+
+    videoElement.addEventListener('seeked', () => {
       const canvas = document.createElement('canvas');
       canvas.width = videoElement.videoWidth;
       canvas.height = videoElement.videoHeight;
-      
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-      
         canvas.toBlob((thumbnailBlob) => {
           if (thumbnailBlob) {
-            const thumbnailURL = URL.createObjectURL(thumbnailBlob);
-            setThumbnail(thumbnailURL);
-            onRecordingComplete({ videoBlob: blob, thumbnail: thumbnailURL });
+            // Convert the blob to a base64 data URL so it persists across reloads.
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const dataUrl = reader.result as string;
+              setThumbnail(dataUrl);
+              onRecordingComplete({ videoBlob: blob, thumbnail: dataUrl });
+            };
+            reader.readAsDataURL(thumbnailBlob);
           }
         }, 'image/jpeg', 0.7);
       }
-    };
+    });
   };
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-4">
       <div className="relative aspect-video bg-gray-100 rounded-lg overflow-hidden mb-4">
-        <video 
-          ref={videoRef} 
-          autoPlay 
-          muted 
-          playsInline
-          className="w-full h-full object-cover"
-        />
+        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
         {thumbnail && (
-          <img 
-            src={thumbnail} 
-            alt="Recording thumbnail" 
+          <img
+            src={thumbnail}
+            alt="Recording thumbnail"
             className="absolute inset-0 w-full h-full object-cover"
           />
         )}
@@ -119,10 +122,7 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
 
       <div className="flex justify-center space-x-4">
         {!isRecording && recordedChunks.length === 0 && (
-          <button
-            onClick={startRecording}
-            className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg"
-          >
+          <button onClick={startRecording} className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg">
             <Camera className="mr-2" size={20} />
             Start Recording
           </button>
@@ -131,26 +131,17 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
         {isRecording && (
           <>
             {!isPaused ? (
-              <button
-                onClick={pauseRecording}
-                className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg"
-              >
+              <button onClick={pauseRecording} className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg">
                 <Pause className="mr-2" size={20} />
                 Pause Recording
               </button>
             ) : (
-              <button
-                onClick={resumeRecording}
-                className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg"
-              >
+              <button onClick={resumeRecording} className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg">
                 <Play className="mr-2" size={20} />
                 Resume Recording
               </button>
             )}
-            <button
-              onClick={stopRecording}
-              className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg"
-            >
+            <button onClick={stopRecording} className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg">
               <Square className="mr-2" size={20} />
               Stop Recording
             </button>
