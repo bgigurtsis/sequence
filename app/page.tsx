@@ -70,6 +70,7 @@ export default function HomePage() {
   const selectedPerformance = performances.find((p) => p.id === selectedPerformanceId);
   const rehearsalsForMetadata = selectedPerformance?.rehearsals?.map((reh) => ({ id: reh.id, title: reh.title })) || [];
 
+  
 
   // Function for updating an existing recording's metadata
   const handleMetadataSave = (metadata: Metadata) => {
@@ -98,48 +99,154 @@ export default function HomePage() {
     }
   };
 
-  const handleDeleteRecordingFromEdit = () => {
+  const handleDeleteRecordingFromEdit = async () => {
     if (editingRecording) {
-      const updated = performances.map((perf) => {
-        if (perf.id === selectedPerformanceId) {
-          const updatedRehearsals = perf.rehearsals.map((reh) => {
-            if (reh.id === editingRecording.rehearsalId) {
-              return { ...reh, recordings: reh.recordings.filter((rec) => rec.id !== editingRecording.recording.id) };
-            }
-            return reh;
-          });
-          return { ...perf, rehearsals: updatedRehearsals };
+      try {
+        const performance = performances.find(p => p.id === selectedPerformanceId);
+        const rehearsal = performance?.rehearsals.find(r => r.id === editingRecording.rehearsalId);
+        
+        if (!performance || !rehearsal) {
+          throw new Error('Performance or rehearsal not found');
         }
-        return perf;
-      });
-      updatePerformances(updated);
-      setEditingRecording(null);
-      setShowMetadataForm(false);
+  
+        const res = await fetch('/api/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            type: 'recording',
+            performanceId: selectedPerformanceId,
+            performanceTitle: performance.title,
+            rehearsalId: editingRecording.rehearsalId,
+            rehearsalTitle: rehearsal.title,
+            recordingId: editingRecording.recording.id,
+            recordingTitle: editingRecording.recording.title
+          }),
+        });
+  
+        const responseData = await res.json();
+        console.log('Delete API response:', responseData);
+  
+        if (!res.ok) {
+          throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
+        }
+  
+        // Update local state
+        const updated = performances.map((perf) => {
+          if (perf.id === selectedPerformanceId) {
+            const updatedRehearsals = perf.rehearsals.map((reh) => {
+              if (reh.id === editingRecording.rehearsalId) {
+                return {
+                  ...reh,
+                  recordings: reh.recordings.filter((rec) => rec.id !== editingRecording.recording.id),
+                };
+              }
+              return reh;
+            });
+            return { ...perf, rehearsals: updatedRehearsals };
+          }
+          return perf;
+        });
+        updatePerformances(updated);
+        setEditingRecording(null);
+        setShowMetadataForm(false);
+      } catch (error) {
+        console.error('Failed to delete recording:', error);
+        alert('Failed to delete recording. Please try again.');
+      }
     }
   };
-
-  const handleDeletePerformanceFromEdit = (performanceId: string) => {
-    const updated = performances.filter((p) => p.id !== performanceId);
-    updatePerformances(updated);
-    setSelectedPerformanceId(updated.length > 0 ? updated[0].id : '');
-    setEditingPerformance(null);
-    setShowPerformanceForm(false);
-  };
-
-  const handleDeleteRehearsalFromEdit = () => {
+  
+  const handleDeleteRehearsalFromEdit = async () => {
     if (editingRehearsal) {
-      const updated = performances.map((perf) => {
-        if (perf.id === editingRehearsal.performanceId) {
-          return { ...perf, rehearsals: perf.rehearsals.filter((reh) => reh.id !== editingRehearsal.rehearsal.id) };
+      try {
+        const performance = performances.find(p => p.id === editingRehearsal.performanceId);
+        
+        if (!performance) {
+          throw new Error('Performance not found');
         }
-        return perf;
-      });
-      updatePerformances(updated);
-      setEditingRehearsal(null);
-      setShowRehearsalForm(false);
+  
+        const res = await fetch('/api/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            type: 'rehearsal',
+            performanceId: editingRehearsal.performanceId,
+            performanceTitle: performance.title,
+            rehearsalId: editingRehearsal.rehearsal.id,
+            rehearsalTitle: editingRehearsal.rehearsal.title
+          }),
+        });
+  
+        const responseData = await res.json();
+        console.log('Delete API response:', responseData);
+  
+        if (!res.ok) {
+          throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
+        }
+  
+        // Update local state
+        const updated = performances.map((perf) => {
+          if (perf.id === editingRehearsal.performanceId) {
+            return {
+              ...perf,
+              rehearsals: perf.rehearsals.filter((reh) => reh.id !== editingRehearsal.rehearsal.id),
+            };
+          }
+          return perf;
+        });
+        updatePerformances(updated);
+        setEditingRehearsal(null);
+        setShowRehearsalForm(false);
+      } catch (error) {
+        console.error('Failed to delete rehearsal:', error);
+        alert('Failed to delete rehearsal. Please try again.');
+      }
     }
   };
-
+  
+  const handleDeletePerformanceFromEdit = async (performanceId: string) => {
+    try {
+      const performance = performances.find(p => p.id === performanceId);
+      
+      if (!performance) {
+        throw new Error('Performance not found');
+      }
+  
+      const res = await fetch('/api/delete', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: 'performance',
+          performanceId,
+          performanceTitle: performance.title
+        }),
+      });
+  
+      const responseData = await res.json();
+      console.log('Delete API response:', responseData);
+  
+      if (!res.ok) {
+        throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
+      }
+  
+      // Update local state
+      const updated = performances.filter((p) => p.id !== performanceId);
+      updatePerformances(updated);
+      setSelectedPerformanceId(updated.length > 0 ? updated[0].id : '');
+      setEditingPerformance(null);
+      setShowPerformanceForm(false);
+    } catch (error) {
+      console.error('Failed to delete performance:', error);
+      alert('Failed to delete performance. Please try again.');
+    }
+  };
+  
   // Pre-recording metadata flow
   const handlePreRecordingMetadataSubmit = (metadata: Metadata) => {
     setPreRecordingMetadata(metadata);
@@ -297,7 +404,7 @@ export default function HomePage() {
     setRecordingTargetRehearsalId(rehearsalId);
     setShowPreRecordingMetadataForm(true);
   };
-
+  
   return (
     <div className="p-4">
       {/* Header */}
