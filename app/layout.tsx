@@ -1,16 +1,28 @@
+import type { Metadata } from 'next';
+import { ClerkProvider } from '@clerk/nextjs';
+import { Inter } from 'next/font/google';
 import './globals.css';
-import { ReactNode } from 'react';
-import ClientClerkProviderWrapper from '../components/ClientClerkProviderWrapper';
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'studiovault',
+  description: 'Record and manage your dance rehearsals',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <html lang="en">
-      <head>
-        <title>Dance Rehearsal App</title>
-      </head>
-      <body>
-        <ClientClerkProviderWrapper>{children}</ClientClerkProviderWrapper>
-      </body>
-    </html>
+    <ClerkProvider>
+      <html lang="en">
+        <body className={inter.className}>
+          {/* Removed the header here */}
+          {children}
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

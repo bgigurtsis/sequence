@@ -86,7 +86,12 @@ export default function HomePage() {
         if (perf.id === selectedPerformanceId) {
           const updatedSections = perf.sections.map((sec) => {
             if (sec.id === editingRecording.sectionId) {
-              return { ...sec, recordings: sec.recordings.filter((rec) => rec.id !== editingRecording.recording.id) };
+              return {
+                ...sec,
+                recordings: sec.recordings.filter(
+                  (rec) => rec.id !== editingRecording.recording.id
+                ),
+              };
             }
             return sec;
           });
@@ -104,7 +109,12 @@ export default function HomePage() {
     if (editingSection) {
       const updatedPerformances = performances.map((perf) => {
         if (perf.id === editingSection.performanceId) {
-          return { ...perf, sections: perf.sections.filter((sec) => sec.id !== editingSection.section.id) };
+          return {
+            ...perf,
+            sections: perf.sections.filter(
+              (sec) => sec.id !== editingSection.section.id
+            ),
+          };
         }
         return perf;
       });
@@ -135,7 +145,12 @@ export default function HomePage() {
             if (sec.id === editingRecording.sectionId) {
               const updatedRecordings = sec.recordings.map((rec) => {
                 if (rec.id === editingRecording.recording.id) {
-                  return { ...rec, ...metadata, performers: metadata.performers, tags: metadata.tags };
+                  return {
+                    ...rec,
+                    ...metadata,
+                    performers: metadata.performers,
+                    tags: metadata.tags,
+                  };
                 }
                 return rec;
               });
@@ -215,7 +230,7 @@ export default function HomePage() {
 
   const handleNewPerformanceSave = (data: { title: string; defaultPerformers: string[] }) => {
     const newPerformance: Performance = {
-      id: "perf-" + Date.now(),
+      id: 'perf-' + Date.now(),
       title: data.title,
       defaultPerformers: data.defaultPerformers,
       sections: [],
@@ -229,7 +244,11 @@ export default function HomePage() {
   const handleEditPerformanceSave = (data: { title: string; defaultPerformers: string[] }) => {
     const updatedPerformances = performances.map((perf) => {
       if (perf.id === editingPerformance?.id) {
-        return { ...perf, title: data.title, defaultPerformers: data.defaultPerformers };
+        return {
+          ...perf,
+          title: data.title,
+          defaultPerformers: data.defaultPerformers,
+        };
       }
       return perf;
     });
@@ -240,7 +259,7 @@ export default function HomePage() {
 
   const handleNewSectionSave = (data: { title: string; location: string; date: string }) => {
     const newSection = {
-      id: "sec-" + Date.now(),
+      id: 'sec-' + Date.now(),
       title: data.title,
       location: data.location,
       date: data.date,
@@ -261,7 +280,12 @@ export default function HomePage() {
       if (perf.id === editingSection?.performanceId) {
         const updatedSections = perf.sections.map((sec) => {
           if (sec.id === editingSection?.section.id) {
-            return { ...sec, title: data.title, location: data.location, date: data.date };
+            return {
+              ...sec,
+              title: data.title,
+              location: data.location,
+              date: data.date,
+            };
           }
           return sec;
         });
@@ -283,7 +307,7 @@ export default function HomePage() {
     <div className="p-4">
       {/* Header with profile */}
       <header className="flex justify-between items-center p-4 bg-gray-200">
-        <h1 className="text-2xl font-bold">Dance Rehearsal App</h1>
+        <h1 className="text-2xl font-bold">StudioVault</h1>
         <UserButton />
       </header>
 
@@ -389,10 +413,17 @@ export default function HomePage() {
               }}
               initialData={
                 editingPerformance
-                  ? { title: editingPerformance.title, defaultPerformers: editingPerformance.defaultPerformers }
+                  ? {
+                      title: editingPerformance.title,
+                      defaultPerformers: editingPerformance.defaultPerformers,
+                    }
                   : {}
               }
-              onDelete={editingPerformance ? () => handleDeletePerformanceFromEdit(editingPerformance.id) : undefined}
+              onDelete={
+                editingPerformance
+                  ? () => handleDeletePerformanceFromEdit(editingPerformance.id)
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -425,7 +456,10 @@ export default function HomePage() {
 
       {/* Video Player Modal */}
       {videoToWatch && (
-        <VideoPlayer videoUrl={videoToWatch.videoUrl} onClose={() => setVideoToWatch(null)} />
+        <VideoPlayer
+          videoUrl={videoToWatch.videoUrl}
+          onClose={() => setVideoToWatch(null)}
+        />
       )}
     </div>
   );

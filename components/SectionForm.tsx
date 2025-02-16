@@ -30,7 +30,7 @@ const SectionForm: React.FC<SectionFormProps> = ({ onSave, onCancel, initialData
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium">Section Title</label>
+        <label className="block text-sm font-medium">Rehearsal Title</label>
         <input
           type="text"
           value={title}

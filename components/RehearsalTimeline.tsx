@@ -86,14 +86,14 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
           </button>
         </div>
         <button onClick={onNewSection} className="bg-green-500 text-white px-4 py-2 rounded">
-          New Section
+          New Rehearsal
         </button>
       </div>
 
       {/* Sections */}
       {performance.sections.length === 0 ? (
         <div className="text-center text-gray-600">
-          No sections found. Create a new section.
+          No rehearsals found. Create a new rehearsal.
         </div>
       ) : (
         performance.sections.map((section) => {
@@ -119,7 +119,7 @@ const RehearsalTimeline: React.FC<RehearsalTimelineProps> = ({
                 </button>
               </div>
               {filteredRecordings.length === 0 ? (
-                <div className="text-gray-500 italic">No recordings match your search in this section.</div>
+                <div className="text-gray-500 italic">No recordings match your search in this rehearsal.</div>
               ) : (
                 filteredRecordings.map((recording) => (
                   <div key={recording.id} className="border rounded-lg p-4 mb-2 hover:bg-gray-50">
