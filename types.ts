@@ -5,7 +5,7 @@ export interface Recording {
     time: string;
     performers: string[];
     notes?: string;
-    rehearsalId: string;
+    rehearsalId: string; // This is required and should be present
     videoUrl: string;
     thumbnailUrl: string;
     tags: string[];
@@ -13,6 +13,7 @@ export interface Recording {
     localCopyAvailable?: boolean;
     createdAt?: string;
   }
+  
   
   export interface Rehearsal {
     id: string;
@@ -40,8 +41,9 @@ export interface Recording {
   
   export interface PendingVideo {
     videoBlob: Blob;
-    thumbnail: string | Blob;
+    thumbnail: string | Blob; // Update to accept either string or Blob
   }
+  
   
   export interface VideoStorageItem {
     id: string;

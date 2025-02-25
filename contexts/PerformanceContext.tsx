@@ -52,7 +52,7 @@ interface PerformanceContextType {
   addRehearsal: (data: { title: string; location: string; date: string }) => void;
   updateRehearsal: (data: { title: string; location: string; date: string }) => void;
   deleteRehearsal: () => Promise<void>;
-  addRecording: (videoBlob: Blob, thumbnail: string, metadata: Metadata) => Promise<void>;
+  addRecording: (videoBlob: Blob, thumbnail: string | Blob, metadata: Metadata) => Promise<void>;
   updateRecordingMetadata: (metadata: Metadata) => void;
   deleteRecording: () => Promise<void>;
   handlePreRecordingMetadataSubmit: (metadata: Metadata) => void;
@@ -366,9 +366,10 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Upload to Google Drive
-  async function uploadToDrive(videoBlob: Blob, thumbnail: string | Blob, metadata: Metadata) {
+  async function uploadToDrive(videoBlob: Blob, thumbnail: Blob, metadata: Metadata) {
     const formData = new FormData();
     formData.append('video', videoBlob, `${metadata.title}.mp4`);
+    formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
     
     // If thumbnail is a string (base64), convert to Blob
     if (typeof thumbnail === 'string') {
@@ -408,8 +409,17 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Add recording (from any source)
   const addRecording = async (videoBlob: Blob, thumbnail: string | Blob, metadata: Metadata) => {
     try {
+      // Convert thumbnail string to Blob if it's a string (base64 data URL)
+      let thumbnailBlob: Blob;
+      if (typeof thumbnail === 'string') {
+        const response = await fetch(thumbnail);
+        thumbnailBlob = await response.blob();
+      } else {
+        thumbnailBlob = thumbnail;
+      }
+      
       // Upload to Google Drive
-      const uploaded = await uploadToDrive(videoBlob, thumbnail, metadata);
+      const uploaded = await uploadToDrive(videoBlob, thumbnailBlob, metadata);
       
       // Create new recording object
       const newRecording: Recording = {

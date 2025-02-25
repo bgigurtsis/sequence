@@ -1,34 +1,11 @@
+// components/RehearsalTimeline.tsx
 'use client';
 
 import React from 'react';
 import { Pencil, Calendar, Clock, Users } from 'lucide-react';
+import { Recording, Rehearsal, Performance } from '../types';
 
-export interface Recording {
-  id: string;
-  title: string;
-  time: string;
-  performers: string[];
-  notes?: string;
-  videoUrl: string;
-  thumbnailUrl: string;
-  tags: string[];
-}
-
-export interface Rehearsal {
-  id: string;
-  title: string;
-  location: string;
-  date: string;
-  recordings: Recording[];
-}
-
-export interface Performance {
-  id: string;
-  title: string;
-  defaultPerformers: string[];
-  rehearsals: Rehearsal[];
-}
-
+// Use imported interfaces from types.ts instead of redefining them
 interface RehearsalTimelineProps {
   performance: Performance;
   performances: Performance[];
