@@ -1,420 +1,126 @@
+// app/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { RedirectToSignIn, UserButton, useUser } from '@clerk/nextjs';
+import { Camera, Upload, Plus } from 'lucide-react';
+import { PerformanceProvider, usePerformances } from '../contexts/PerformanceContext';
 import VideoRecorder from '../components/VideoRecorder';
 import MetadataForm from '../components/MetadataForm';
 import VideoPlayer from '../components/VideoPlayer';
-import RehearsalTimeline, { Performance, Rehearsal, Recording } from '../components/RehearsalTimeline';
+import RehearsalTimeline from '../components/RehearsalTimeline';
 import PerformanceForm from '../components/PerformanceForm';
 import RehearsalForm from '../components/RehearsalForm';
+import VideoUpload from '../components/VideoUpload';
+import TodaysRecordings from '../components/TodaysRecordings';
+import { PendingVideo } from '../types';
 
-type Metadata = {
-  title: string;
-  time: string;
-  performers: string[];
-  notes?: string;
-  rehearsalId: string;
-  tags: string[];
-};
-
-type PendingVideo = {
-  videoBlob: Blob;
-  thumbnail: string;
-};
-
+// Main Page Component (Wrapper with PerformanceProvider)
 export default function HomePage() {
-  // First, declare all state variables
-  const [performances, setPerformances] = useState<Performance[]>([]);
-  const [selectedPerformanceId, setSelectedPerformanceId] = useState<string>('');
-  const [recordingTargetRehearsalId, setRecordingTargetRehearsalId] = useState<string | null>(null);
-  const [showPreRecordingMetadataForm, setShowPreRecordingMetadataForm] = useState<boolean>(false);
-  const [preRecordingMetadata, setPreRecordingMetadata] = useState<Metadata | null>(null);
-  const [showRecorder, setShowRecorder] = useState<boolean>(false);
-  const [showMetadataForm, setShowMetadataForm] = useState<boolean>(false);
-  const [editingRecording, setEditingRecording] = useState<{ rehearsalId: string; recording: Recording } | null>(null);
-  const [videoToWatch, setVideoToWatch] = useState<{ recording: Recording; videoUrl: string } | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [showPerformanceForm, setShowPerformanceForm] = useState<boolean>(false);
-  const [editingPerformance, setEditingPerformance] = useState<Performance | null>(null);
-  const [showRehearsalForm, setShowRehearsalForm] = useState<boolean>(false);
-  const [editingRehearsal, setEditingRehearsal] = useState<{ performanceId: string; rehearsal: Rehearsal } | null>(null);
-
   const { user } = useUser();
-  const router = useRouter();
-
-  // Initialize performances from localStorage
-  useEffect(() => {
-    if (user) {
-      const saved = localStorage.getItem('performances');
-      if (saved) {
-        const parsed = JSON.parse(saved) as Performance[];
-        setPerformances(parsed);
-        if (parsed.length > 0) {
-          setSelectedPerformanceId(parsed[0].id);
-        }
-      }
-    }
-  }, [user]);
 
   if (!user) {
     return <RedirectToSignIn />;
   }
 
-  const updatePerformances = (newPerformances: Performance[]) => {
-    setPerformances(newPerformances);
-    localStorage.setItem('performances', JSON.stringify(newPerformances));
-  };
+  return (
+    <PerformanceProvider>
+      <HomePageContent />
+    </PerformanceProvider>
+  );
+}
 
-  const selectedPerformance = performances.find((p) => p.id === selectedPerformanceId);
-  const rehearsalsForMetadata = selectedPerformance?.rehearsals?.map((reh) => ({ id: reh.id, title: reh.title })) || [];
+// Content Component (Uses context)
+function HomePageContent() {
+  const { 
+    // State
+    performances,
+    selectedPerformanceId,
+    searchQuery,
+    showRecorder,
+    showMetadataForm,
+    showPerformanceForm,
+    showRehearsalForm,
+    showPreRecordingMetadataForm,
+    editingRecording,
+    editingRehearsal,
+    editingPerformance,
+    recordingTargetRehearsalId,
+    preRecordingMetadata,
+    videoToWatch,
+    selectedPerformance,
 
-  
+    // Actions
+    setSearchQuery,
+    setSelectedPerformanceId,
+    
+    // Modal Controls
+    openRecorder,
+    closeRecorder,
+    openPreRecordingMetadata,
+    closePreRecordingMetadata,
+    openMetadataForm,
+    closeMetadataForm,
+    openPerformanceForm,
+    closePerformanceForm,
+    openRehearsalForm,
+    closeRehearsalForm,
+    openVideoPlayer,
+    closeVideoPlayer,
+    
+    // CRUD Operations
+    addPerformance,
+    updatePerformance,
+    deletePerformance,
+    addRehearsal,
+    updateRehearsal,
+    deleteRehearsal,
+    addRecording,
+    updateRecordingMetadata,
+    deleteRecording,
+    handlePreRecordingMetadataSubmit,
+  } = usePerformances();
 
-  // Function for updating an existing recording's metadata
-  const handleMetadataSave = (metadata: Metadata) => {
-    if (editingRecording) {
-      const updated = performances.map((perf) => {
-        if (perf.id === selectedPerformanceId) {
-          const updatedRehearsals = perf.rehearsals.map((reh) => {
-            if (reh.id === editingRecording.rehearsalId) {
-              const updatedRecordings = reh.recordings.map((rec) => {
-                if (rec.id === editingRecording.recording.id) {
-                  return { ...rec, ...metadata, performers: metadata.performers, tags: metadata.tags };
-                }
-                return rec;
-              });
-              return { ...reh, recordings: updatedRecordings };
-            }
-            return reh;
-          });
-          return { ...perf, rehearsals: updatedRehearsals };
-        }
-        return perf;
-      });
-      updatePerformances(updated);
-      setEditingRecording(null);
-      setShowMetadataForm(false);
-    }
-  };
+  // New state for showing the upload component
+  const [showUpload, setShowUpload] = useState(false);
 
-  const handleDeleteRecordingFromEdit = async () => {
-    if (editingRecording) {
-      try {
-        const performance = performances.find(p => p.id === selectedPerformanceId);
-        const rehearsal = performance?.rehearsals.find(r => r.id === editingRecording.rehearsalId);
-        
-        if (!performance || !rehearsal) {
-          throw new Error('Performance or rehearsal not found');
-        }
-  
-        const res = await fetch('/api/delete', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            type: 'recording',
-            performanceId: selectedPerformanceId,
-            performanceTitle: performance.title,
-            rehearsalId: editingRecording.rehearsalId,
-            rehearsalTitle: rehearsal.title,
-            recordingId: editingRecording.recording.id,
-            recordingTitle: editingRecording.recording.title
-          }),
-        });
-  
-        const responseData = await res.json();
-        console.log('Delete API response:', responseData);
-  
-        if (!res.ok) {
-          throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
-        }
-  
-        // Update local state
-        const updated = performances.map((perf) => {
-          if (perf.id === selectedPerformanceId) {
-            const updatedRehearsals = perf.rehearsals.map((reh) => {
-              if (reh.id === editingRecording.rehearsalId) {
-                return {
-                  ...reh,
-                  recordings: reh.recordings.filter((rec) => rec.id !== editingRecording.recording.id),
-                };
-              }
-              return reh;
-            });
-            return { ...perf, rehearsals: updatedRehearsals };
-          }
-          return perf;
-        });
-        updatePerformances(updated);
-        setEditingRecording(null);
-        setShowMetadataForm(false);
-      } catch (error) {
-        console.error('Failed to delete recording:', error);
-        alert('Failed to delete recording. Please try again.');
-      }
-    }
-  };
-  
-  const handleDeleteRehearsalFromEdit = async () => {
-    if (editingRehearsal) {
-      try {
-        const performance = performances.find(p => p.id === editingRehearsal.performanceId);
-        
-        if (!performance) {
-          throw new Error('Performance not found');
-        }
-  
-        const res = await fetch('/api/delete', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            type: 'rehearsal',
-            performanceId: editingRehearsal.performanceId,
-            performanceTitle: performance.title,
-            rehearsalId: editingRehearsal.rehearsal.id,
-            rehearsalTitle: editingRehearsal.rehearsal.title
-          }),
-        });
-  
-        const responseData = await res.json();
-        console.log('Delete API response:', responseData);
-  
-        if (!res.ok) {
-          throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
-        }
-  
-        // Update local state
-        const updated = performances.map((perf) => {
-          if (perf.id === editingRehearsal.performanceId) {
-            return {
-              ...perf,
-              rehearsals: perf.rehearsals.filter((reh) => reh.id !== editingRehearsal.rehearsal.id),
-            };
-          }
-          return perf;
-        });
-        updatePerformances(updated);
-        setEditingRehearsal(null);
-        setShowRehearsalForm(false);
-      } catch (error) {
-        console.error('Failed to delete rehearsal:', error);
-        alert('Failed to delete rehearsal. Please try again.');
-      }
-    }
-  };
-  
-  const handleDeletePerformanceFromEdit = async (performanceId: string) => {
-    try {
-      const performance = performances.find(p => p.id === performanceId);
-      
-      if (!performance) {
-        throw new Error('Performance not found');
-      }
-  
-      const res = await fetch('/api/delete', {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'performance',
-          performanceId,
-          performanceTitle: performance.title
-        }),
-      });
-  
-      const responseData = await res.json();
-      console.log('Delete API response:', responseData);
-  
-      if (!res.ok) {
-        throw new Error(`Failed to delete from Google Drive: ${responseData.error}`);
-      }
-  
-      // Update local state
-      const updated = performances.filter((p) => p.id !== performanceId);
-      updatePerformances(updated);
-      setSelectedPerformanceId(updated.length > 0 ? updated[0].id : '');
-      setEditingPerformance(null);
-      setShowPerformanceForm(false);
-    } catch (error) {
-      console.error('Failed to delete performance:', error);
-      alert('Failed to delete performance. Please try again.');
-    }
-  };
-  
-  // Pre-recording metadata flow
-  const handlePreRecordingMetadataSubmit = (metadata: Metadata) => {
-    setPreRecordingMetadata(metadata);
-    setShowPreRecordingMetadataForm(false);
-    setShowRecorder(true);
-    setRecordingTargetRehearsalId(metadata.rehearsalId);
-  };
-
-  // Upload function using pre-recording metadata
-  async function uploadToDrive(videoBlob: Blob, thumbnail: string, metadata: Metadata) {
-    const thumbResponse = await fetch(thumbnail);
-    const thumbBlob = await thumbResponse.blob();
-
-    const formData = new FormData();
-    formData.append('video', videoBlob, `${metadata.title}.mp4`);
-    formData.append('thumbnail', thumbBlob, `${metadata.title}_thumb.jpg`);
-    const performance = selectedPerformance;
-    const performanceTitle = performance ? performance.title : 'Untitled Performance';
-    let rehearsalTitle = 'Untitled Rehearsal';
-    if (selectedPerformance) {
-      const reh = selectedPerformance.rehearsals.find((r) => r.id === metadata.rehearsalId);
-      if (reh) rehearsalTitle = reh.title;
-    }
-    formData.append('performanceId', selectedPerformanceId);
-    formData.append('performanceTitle', performanceTitle);
-    formData.append('rehearsalId', metadata.rehearsalId);
-    formData.append('rehearsalTitle', rehearsalTitle);
-    formData.append('recordingTitle', metadata.title);
-
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) {
-      throw new Error('Upload failed');
-    }
-    return res.json();
-  }
-
-  const handleRecordingComplete = async (videoData: { videoBlob: Blob; thumbnail: string }) => {
+  // Handler for video recording completion
+  const handleRecordingComplete = async (videoData: PendingVideo) => {
     try {
       if (!preRecordingMetadata) throw new Error('Missing metadata');
-      const uploaded = await uploadToDrive(videoData.videoBlob, videoData.thumbnail, preRecordingMetadata);
-      const newRecording = {
-        id: Date.now().toString(),
-        title: preRecordingMetadata.title,
-        time: preRecordingMetadata.time,
-        performers: preRecordingMetadata.performers,
-        notes: preRecordingMetadata.notes,
-        videoUrl: uploaded.videoUrl,
-        thumbnailUrl: videoData.thumbnail,
-        tags: preRecordingMetadata.tags,
-      };
-      const updated = performances.map((perf) => {
-        if (perf.id === selectedPerformanceId) {
-          const updatedRehearsals = perf.rehearsals.map((reh) => {
-            if (reh.id === preRecordingMetadata.rehearsalId) {
-              return { ...reh, recordings: [...reh.recordings, newRecording] };
-            }
-            return reh;
-          });
-          return { ...perf, rehearsals: updatedRehearsals };
-        }
-        return perf;
-      });
-      updatePerformances(updated);
-      setPreRecordingMetadata(null);
-      setShowRecorder(false);
+      await addRecording(videoData.videoBlob, videoData.thumbnail, preRecordingMetadata);
+    } catch (error) {
+      console.error('Recording upload failed', error);
+    }
+  };
+
+  // Handler for video upload
+  const handleVideoSelected = async (videoBlob: Blob, thumbnailBlob: Blob) => {
+    try {
+      if (!preRecordingMetadata) throw new Error('Missing metadata');
+      await addRecording(videoBlob, thumbnailBlob, preRecordingMetadata);
+      setShowUpload(false);
     } catch (error) {
       console.error('Upload failed', error);
     }
   };
 
-  const handleWatchRecording = (rehearsalId: string, recording: Recording) => {
-    setVideoToWatch({ recording, videoUrl: recording.videoUrl });
-  };
+  // Computed properties
+  const rehearsalsForMetadata = selectedPerformance?.rehearsals?.map((reh) => ({ id: reh.id, title: reh.title })) || [];
 
-  const handleEditRecording = (rehearsalId: string, recording: Recording) => {
-    setEditingRecording({ rehearsalId, recording });
-    setShowMetadataForm(true);
-  };
-
-  const handleEditRehearsal = (rehearsal: Rehearsal) => {
-    setEditingRehearsal({ performanceId: selectedPerformanceId, rehearsal });
-    setShowRehearsalForm(true);
-  };
-
-  const handleEditPerformance = (performance: Performance) => {
-    setEditingPerformance(performance);
-    setShowPerformanceForm(true);
-  };
-
-  const handleNewPerformanceSave = (data: { title: string; defaultPerformers: string[] }) => {
-    const newPerformance = {
-      id: 'perf-' + Date.now(),
-      title: data.title,
-      defaultPerformers: data.defaultPerformers,
-      rehearsals: [],
-    };
-    const updated = [...performances, newPerformance];
-    updatePerformances(updated);
-    setSelectedPerformanceId(newPerformance.id);
-    setShowPerformanceForm(false);
-  };
-
-  const handleEditPerformanceSave = (data: { title: string; defaultPerformers: string[] }) => {
-    const updated = performances.map((perf) => {
-      if (perf.id === editingPerformance?.id) {
-        return { ...perf, title: data.title, defaultPerformers: data.defaultPerformers };
-      }
-      return perf;
-    });
-    updatePerformances(updated);
-    setEditingPerformance(null);
-    setShowPerformanceForm(false);
-  };
-
-  const handleNewRehearsalSave = (data: { title: string; location: string; date: string }) => {
-    const newRehearsal = {
-      id: 'reh-' + Date.now(),
-      title: data.title,
-      location: data.location,
-      date: data.date,
-      recordings: [],
-    };
-    const updated = performances.map((perf) => {
-      if (perf.id === selectedPerformanceId) {
-        return { ...perf, rehearsals: [...perf.rehearsals, newRehearsal] };
-      }
-      return perf;
-    });
-    updatePerformances(updated);
-    setShowRehearsalForm(false);
-  };
-
-  const handleEditRehearsalSave = (data: { title: string; location: string; date: string }) => {
-    const updated = performances.map((perf) => {
-      if (perf.id === editingRehearsal?.performanceId) {
-        const updatedRehearsals = perf.rehearsals.map((reh) => {
-          if (reh.id === editingRehearsal?.rehearsal.id) {
-            return { ...reh, title: data.title, location: data.location, date: data.date };
-          }
-          return reh;
-        });
-        return { ...perf, rehearsals: updatedRehearsals };
-      }
-      return perf;
-    });
-    updatePerformances(updated);
-    setEditingRehearsal(null);
-    setShowRehearsalForm(false);
-  };
-
-  const handleRecordRehearsal = (rehearsalId: string) => {
-    setRecordingTargetRehearsalId(rehearsalId);
-    setShowPreRecordingMetadataForm(true);
-  };
-  
   return (
-    <div className="p-4">
+    <div className="p-4 max-w-5xl mx-auto">
       {/* Header */}
-      <header className="flex justify-between items-center p-4 bg-gray-200">
+      <header className="flex justify-between items-center p-4 bg-gray-200 rounded-lg mb-6">
         <h1 className="text-2xl font-bold">StageVault</h1>
         <UserButton />
       </header>
 
+      {/* Today's Recordings Section */}
+      <TodaysRecordings />
+
       {/* Search Bar */}
-      <div className="mb-4 mt-4">
+      <div className="mb-4">
         <input
           type="text"
           placeholder="Search recordings by title, performers, or tags..."
@@ -427,10 +133,35 @@ export default function HomePage() {
       {/* Top Controls */}
       <div className="flex justify-between mb-4">
         <div>
-          <button onClick={() => setShowPerformanceForm(true)} className="bg-purple-500 text-white px-4 py-2 rounded">
+          <button onClick={() => openPerformanceForm()} className="bg-purple-500 text-white px-4 py-2 rounded flex items-center">
+            <Plus size={16} className="mr-1" />
             New Performance
           </button>
         </div>
+
+        {selectedPerformance && (
+          <div className="flex space-x-2">
+            <button 
+              onClick={() => openPreRecordingMetadata(selectedPerformance.rehearsals[0]?.id)} 
+              className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
+              disabled={!selectedPerformance.rehearsals.length}
+            >
+              <Camera size={16} className="mr-1" />
+              Record
+            </button>
+            <button 
+              onClick={() => {
+                openPreRecordingMetadata(selectedPerformance.rehearsals[0]?.id);
+                setShowUpload(true);
+              }} 
+              className="bg-green-500 text-white px-4 py-2 rounded flex items-center"
+              disabled={!selectedPerformance.rehearsals.length}
+            >
+              <Upload size={16} className="mr-1" />
+              Upload
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Timeline */}
@@ -439,25 +170,34 @@ export default function HomePage() {
           performance={selectedPerformance}
           performances={performances}
           searchQuery={searchQuery}
-          onSelectPerformance={(id) => setSelectedPerformanceId(id)}
-          onWatchRecording={handleWatchRecording}
-          onEditRecording={handleEditRecording}
-          onEditRehearsal={handleEditRehearsal}
-          onNewRehearsal={() => setShowRehearsalForm(true)}
-          onEditPerformance={handleEditPerformance}
-          onRecordRehearsal={handleRecordRehearsal}
+          onSelectPerformance={setSelectedPerformanceId}
+          onWatchRecording={(rehearsalId, recording) => openVideoPlayer(recording)}
+          onEditRecording={openMetadataForm}
+          onEditRehearsal={(rehearsal) => openRehearsalForm(selectedPerformanceId, rehearsal)}
+          onNewRehearsal={() => openRehearsalForm(selectedPerformanceId)}
+          onEditPerformance={(performance) => openPerformanceForm(performance)}
+          onRecordRehearsal={openPreRecordingMetadata}
         />
       ) : (
-        <div className="text-center">Select a performance to view details.</div>
+        <div className="text-center p-12 bg-gray-50 rounded-lg">
+          <p className="text-gray-500 mb-4">No performances yet. Create your first performance to get started.</p>
+          <button 
+            onClick={() => openPerformanceForm()} 
+            className="bg-purple-500 text-white px-6 py-3 rounded-lg font-medium"
+          >
+            Create Performance
+          </button>
+        </div>
       )}
 
-{/* Pre-recording Metadata Form Modal */}
-{showPreRecordingMetadataForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-4 rounded shadow-lg">
+      {/* Pre-recording Metadata Form Modal */}
+      {showPreRecordingMetadataForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg max-w-md w-full">
+            <h2 className="text-xl font-semibold mb-4">Recording Details</h2>
             <MetadataForm
               onSave={handlePreRecordingMetadataSubmit}
-              onCancel={() => setShowPreRecordingMetadataForm(false)}
+              onCancel={closePreRecordingMetadata}
               rehearsals={rehearsalsForMetadata}
               availablePerformers={selectedPerformance ? selectedPerformance.defaultPerformers : []}
               initialValues={{ rehearsalId: recordingTargetRehearsalId || '' }}
@@ -466,17 +206,15 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Video Recorder Modal */}
-      {showRecorder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-4 rounded shadow-lg">
+      {/* Video Recorder or Upload Modal */}
+      {showRecorder && !showUpload && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg">
+            <h2 className="text-xl font-semibold mb-4">Record Video</h2>
             <VideoRecorder onRecordingComplete={handleRecordingComplete} />
             <button
-              onClick={() => {
-                setShowRecorder(false);
-                setRecordingTargetRehearsalId(null);
-              }}
-              className="mt-2 text-red-500"
+              onClick={closeRecorder}
+              className="mt-4 text-red-500 font-medium"
             >
               Cancel
             </button>
@@ -484,17 +222,30 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Video Upload Modal */}
+      {showRecorder && showUpload && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg">
+            <h2 className="text-xl font-semibold mb-4">Upload Video</h2>
+            <VideoUpload 
+              onVideoSelected={handleVideoSelected} 
+              onCancel={() => {
+                closeRecorder();
+                setShowUpload(false);
+              }} 
+            />
+          </div>
+        </div>
+      )}
+
       {/* Metadata Form Modal for Editing Recording */}
       {showMetadataForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-4 rounded shadow-lg">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg max-w-md w-full">
+            <h2 className="text-xl font-semibold mb-4">Edit Recording</h2>
             <MetadataForm
-              onSave={handleMetadataSave}
-              onCancel={() => {
-                setShowMetadataForm(false);
-                setEditingRecording(null);
-                setRecordingTargetRehearsalId(null);
-              }}
+              onSave={updateRecordingMetadata}
+              onCancel={closeMetadataForm}
               rehearsals={rehearsalsForMetadata}
               availablePerformers={selectedPerformance ? selectedPerformance.defaultPerformers : []}
               initialValues={
@@ -509,7 +260,7 @@ export default function HomePage() {
                     }
                   : { rehearsalId: recordingTargetRehearsalId || '' }
               }
-              onDelete={editingRecording ? handleDeleteRecordingFromEdit : undefined}
+              onDelete={deleteRecording}
             />
           </div>
         </div>
@@ -517,20 +268,20 @@ export default function HomePage() {
 
       {/* Performance Form Modal */}
       {showPerformanceForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-4 rounded shadow-lg">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg max-w-md w-full">
+            <h2 className="text-xl font-semibold mb-4">
+              {editingPerformance ? 'Edit Performance' : 'New Performance'}
+            </h2>
             <PerformanceForm
-              onSave={editingPerformance ? handleEditPerformanceSave : handleNewPerformanceSave}
-              onCancel={() => {
-                setShowPerformanceForm(false);
-                setEditingPerformance(null);
-              }}
+              onSave={editingPerformance ? updatePerformance : addPerformance}
+              onCancel={closePerformanceForm}
               initialData={
                 editingPerformance
                   ? { title: editingPerformance.title, defaultPerformers: editingPerformance.defaultPerformers }
                   : {}
               }
-              onDelete={editingPerformance ? () => handleDeletePerformanceFromEdit(editingPerformance.id) : undefined}
+              onDelete={editingPerformance ? () => deletePerformance(editingPerformance.id) : undefined}
             />
           </div>
         </div>
@@ -538,14 +289,14 @@ export default function HomePage() {
 
       {/* Rehearsal Form Modal */}
       {showRehearsalForm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
-          <div className="bg-white p-4 rounded shadow-lg">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
+          <div className="bg-white p-4 rounded-lg shadow-lg max-w-md w-full">
+            <h2 className="text-xl font-semibold mb-4">
+              {editingRehearsal ? 'Edit Rehearsal' : 'New Rehearsal'}
+            </h2>
             <RehearsalForm
-              onSave={editingRehearsal ? handleEditRehearsalSave : handleNewRehearsalSave}
-              onCancel={() => {
-                setShowRehearsalForm(false);
-                setEditingRehearsal(null);
-              }}
+              onSave={editingRehearsal ? updateRehearsal : addRehearsal}
+              onCancel={closeRehearsalForm}
               initialData={
                 editingRehearsal
                   ? {
@@ -555,7 +306,7 @@ export default function HomePage() {
                     }
                   : {}
               }
-              onDelete={editingRehearsal ? handleDeleteRehearsalFromEdit : undefined}
+              onDelete={editingRehearsal ? deleteRehearsal : undefined}
             />
           </div>
         </div>
@@ -563,7 +314,11 @@ export default function HomePage() {
 
       {/* Video Player Modal */}
       {videoToWatch && (
-        <VideoPlayer videoUrl={videoToWatch.videoUrl} onClose={() => setVideoToWatch(null)} />
+        <VideoPlayer 
+          videoUrl={videoToWatch.videoUrl} 
+          recordingId={videoToWatch.recording.id}
+          onClose={closeVideoPlayer} 
+        />
       )}
     </div>
   );
