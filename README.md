@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Sequence App
+
+A video recording and management application for performances and rehearsals, with Google Drive integration for cloud storage.
 
 ## Getting Started
 
-First, run the development server:
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Create a `.env.local` file based on the `.env.example` file
+
+### Google Drive Integration Setup
+
+To enable Google Drive synchronization:
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Enable the Google Drive API
+4. Create a service account with the following roles:
+   - Drive Admin (roles/drive.admin)
+5. Create a key for the service account (JSON format)
+6. Copy the contents of the JSON file and paste it in the `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` variable in your `.env.local` file
+7. Share the Google Drive folder you want to use with the service account email address
+
+### Development
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Troubleshooting Google Drive Integration
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+If you're experiencing issues with Google Drive synchronization:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Check if the Google Drive API is enabled in your Google Cloud Console
+2. Verify that your service account has the correct permissions
+3. Ensure your service account credentials are correctly formatted in the `.env.local` file
+4. Look for error messages in the browser console and server logs
+5. Use the "Test API Connection" button in the Sync Status panel to diagnose connection issues
 
-## Learn More
+### File Structure
 
-To learn more about Next.js, take a look at the following resources:
+- `/app` - Next.js App Router pages and API routes
+- `/components` - React components
+- `/contexts` - React context providers
+- `/lib` - Utility functions and helpers
+- `/services` - Client-side services like sync and storage
+- `/types` - TypeScript type definitions
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### API Routes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `/api/ping` - Tests Google Drive API connectivity
+- `/api/upload` - Uploads videos to Google Drive
+- `/api/delete` - Deletes videos from Google Drive
 
-## Deploy on Vercel
+## Features
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Record videos directly in the browser
+- Upload existing video files
+- Add external video links
+- Organize videos by performances and rehearsals
+- Add metadata to recordings
+- Synchronize recordings with Google Drive
+- Offline-first approach - work even without internet
+- Background synchronization when online

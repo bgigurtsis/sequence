@@ -14,6 +14,7 @@ import RehearsalForm from '../components/RehearsalForm';
 import VideoUpload from '../components/VideoUpload';
 import TodaysRecordings from '../components/TodaysRecordings';
 import { PendingVideo, Recording, Rehearsal, Performance, Metadata } from '../types';
+
 import SyncStatus from '../components/SyncStatus';
 import CalendarView from '../components/CalendarView';
 import SearchBar from '../components/SearchBar';
@@ -23,6 +24,15 @@ import { generateId } from '../lib/utils';
 import RecordingOptions from '../components/RecordingOptions';
 import VideoLinkInput from '../components/VideoLinkInput';
 import RecordingDetailsModal from '../components/RecordingDetailsModal';
+
+// Add a utility function to format dates consistently
+function formatDateForMetadata(): string {
+  return new Date().toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }).replace(/\//g, '-');
+}
 
 // Main Page Component (Wrapper with PerformanceProvider)
 export default function HomePage() {
@@ -121,8 +131,64 @@ function HomePageContent() {
   // Handler for video recording completion
   const handleVideoRecordingComplete = async (videoData: { videoBlob: Blob; thumbnail: string }) => {
     try {
-      if (!preRecordingMetadata) throw new Error('Missing metadata');
-      if (!recordingTargetRehearsalId) throw new Error('Missing rehearsal ID');
+      // Generate default metadata if none exists
+      if (!preRecordingMetadata) {
+        // Instead of throwing an error, create default metadata
+        const defaultMetadata: Metadata = {
+          title: `Recording at ${new Date().toLocaleTimeString()}`,
+          time: new Date().toLocaleTimeString(),
+          performers: [],
+          rehearsalId: recordingTargetRehearsalId || '',
+          tags: [],
+          sourceType: 'recorded',
+          date: formatDateForMetadata()
+        };
+        
+        // If we have a rehearsal ID, proceed with the recording
+        if (recordingTargetRehearsalId) {
+          console.log('No pre-recording metadata found, using defaults');
+          console.log('Created recording with date:', defaultMetadata.date);
+          
+          // Convert thumbnail to blob
+          const response = await fetch(videoData.thumbnail);
+          const thumbnailBlob = await response.blob();
+          
+          // Add the recording with default metadata
+          await addRecording(
+            recordingTargetRehearsalId,
+            videoData.videoBlob, 
+            thumbnailBlob, 
+            defaultMetadata
+          );
+          
+          // Close recorder and reset state
+          setShowRecorder(false);
+          setRecordingTargetRehearsalId(null);
+          
+          console.log('Recording successfully added with default metadata');
+          return;
+        } else {
+          // If no rehearsal ID, we still can't proceed
+          console.error('Missing rehearsal ID, cannot save recording');
+          alert('Please select a rehearsal before recording');
+          return;
+        }
+      }
+      
+      // Add date to metadata if not already present
+      if (preRecordingMetadata) {
+        if (!preRecordingMetadata.date) {
+          preRecordingMetadata.date = formatDateForMetadata();
+          console.log('Added date to metadata:', preRecordingMetadata.date);
+        }
+      }
+      
+      // Continue with the normal flow if metadata exists
+      if (!recordingTargetRehearsalId) {
+        console.error('Missing rehearsal ID');
+        alert('Please select a rehearsal before recording');
+        return;
+      }
       
       console.log('Recording complete, processing with metadata:', preRecordingMetadata);
       
@@ -130,7 +196,7 @@ function HomePageContent() {
       const response = await fetch(videoData.thumbnail);
       const thumbnailBlob = await response.blob();
       
-      // Add the recording with proper parameters
+      // Add the recording with provided metadata
       await addRecording(
         recordingTargetRehearsalId,
         videoData.videoBlob, 
@@ -146,6 +212,7 @@ function HomePageContent() {
       console.log('Recording successfully added');
     } catch (error) {
       console.error('Recording upload failed', error);
+      alert('Failed to save recording. Please try again.');
     }
   };
 
@@ -170,7 +237,8 @@ function HomePageContent() {
         rehearsalId: recordingTargetRehearsalId,
         tags: ['uploaded'],
         sourceType: 'uploaded',
-        fileName: fileName || 'uploaded-file.mp4' // Store the filename
+        fileName: fileName || 'uploaded-file.mp4', // Store the filename
+        date: formatDateForMetadata()
       });
       
       // Show the metadata form
@@ -197,14 +265,13 @@ function HomePageContent() {
   // Create local versions with different names to avoid redeclaration
   const handleAddPerformance = (data: { title: string; defaultPerformers: string[] }) => {
     const newPerformanceId = generateId('perf');
-    const newPerformance: Performance = {  // Add explicit type
+    const newPerformance: Performance = {
       id: newPerformanceId,
       title: data.title,
       defaultPerformers: data.defaultPerformers,
       rehearsals: []
     };
     
-    // Fix the implicit any type
     setPerformances((prev: Performance[]) => [...prev, newPerformance]);
     setSelectedPerformanceId(newPerformanceId);
     closePerformanceForm();
@@ -213,7 +280,6 @@ function HomePageContent() {
   const handleUpdatePerformance = (data: { title: string; defaultPerformers: string[] }) => {
     if (!editingPerformance) return;
     
-    // Fix the implicit any types
     setPerformances((prevPerformances: Performance[]) => 
       prevPerformances.map((p: Performance) => 
         p.id === editingPerformance.id 
@@ -231,6 +297,21 @@ function HomePageContent() {
   };
 
   const startRecording = (rehearsalId: string) => {
+    // Set the rehearsal ID
+    setRecordingTargetRehearsalId(rehearsalId);
+    
+    // Always create a basic preRecordingMetadata to avoid the error
+    setPreRecordingMetadata({
+      title: `Recording at ${new Date().toLocaleTimeString()}`,
+      time: new Date().toLocaleTimeString(),
+      performers: [],
+      rehearsalId: rehearsalId,
+      tags: [],
+      sourceType: 'recorded',
+      date: formatDateForMetadata()
+    });
+    
+    // Then start recording
     setRecordingMode('record');
     setShowRecorder(true);
   };
@@ -272,8 +353,9 @@ function HomePageContent() {
         performers: [],
         rehearsalId: recordingTargetRehearsalId,
         tags: [],
-        sourceType: 'external', // Using the proper type
-        externalUrl: url
+        sourceType: 'external',
+        externalUrl: url,
+        date: formatDateForMetadata()
       };
       
       // Pass the metadata to the external video link handler
@@ -321,7 +403,6 @@ function HomePageContent() {
 
   // We need to create wrapper functions for the RecordingOptions component
   const handleRecordInOptions = () => {
-    // If we have a target rehearsal ID, use it, otherwise use null
     const targetRehearsalId = recordingTargetRehearsalId;
     if (targetRehearsalId) {
       startRecording(targetRehearsalId);
@@ -350,7 +431,6 @@ function HomePageContent() {
 
   // And create a wrapper for onWatchRecording
   const handleWatchRecording = (rehearsalId: string, recording: Recording) => {
-    // If we just need the recording, we can ignore the rehearsalId
     openVideoPlayer(recording);
   };
 
@@ -370,9 +450,9 @@ function HomePageContent() {
     const parts = domain.split('.');
     const mainPart = parts[0] === 'www' ? parts[1] : parts[0];
     const initials = mainPart.substring(0, 2).toUpperCase();
-    
+
     // Generate a simple SVG with the initials
-    const color = '#' + Math.floor(Math.random()*16777215).toString(16);
+    const color = '#' + Math.floor(Math.random() * 16777215).toString(16);
     const svg = `
       <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
         <rect width="120" height="120" fill="${color}" />
@@ -381,7 +461,7 @@ function HomePageContent() {
         </text>
       </svg>
     `;
-    
+
     return 'data:image/svg+xml;base64,' + btoa(svg);
   };
 
@@ -402,11 +482,7 @@ function HomePageContent() {
       const newRecording: Recording = {
         id: generateId('rec'),
         title: metadata.title,
-        date: new Date().toLocaleDateString('en-GB', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        }).replace(/\//g, '-'),
+        date: formatDateForMetadata(),
         time: metadata.time,
         performers: metadata.performers,
         notes: metadata.notes,
@@ -417,7 +493,7 @@ function HomePageContent() {
         isExternalLink: true,
         externalUrl: externalUrl,
         sourceType: 'external',
-        domain: domain // Store the domain for display purposes
+        domain: domain
       };
       
       // Add the recording
@@ -441,13 +517,14 @@ function HomePageContent() {
     const metadata: Metadata = {
       title: formData.title,
       time: formData.time,
-      performers: formData.performers,
+      performers: formData.performers || [],
       notes: formData.notes,
       rehearsalId: formData.rehearsalId,
-      tags: formData.tags,
+      tags: formData.tags || [],
       sourceType: formData.sourceType as 'recorded' | 'uploaded' | 'external' | undefined,
       fileName: formData.fileName,
-      externalUrl: formData.externalUrl
+      externalUrl: formData.externalUrl,
+      date: formData.date || formatDateForMetadata()
     };
     
     handlePreRecordingMetadataSubmit(metadata);
@@ -458,13 +535,14 @@ function HomePageContent() {
     const metadata: Metadata = {
       title: formData.title,
       time: formData.time,
-      performers: formData.performers,
+      performers: formData.performers || [],
       notes: formData.notes,
       rehearsalId: formData.rehearsalId,
-      tags: formData.tags,
+      tags: formData.tags || [],
       sourceType: formData.sourceType as 'recorded' | 'uploaded' | 'external' | undefined,
       fileName: formData.fileName,
-      externalUrl: formData.externalUrl
+      externalUrl: formData.externalUrl,
+      date: formData.date || formatDateForMetadata()
     };
     
     updateRecordingMetadata(metadata);
@@ -485,7 +563,8 @@ function HomePageContent() {
         rehearsalId: recording.rehearsalId,
         tags: recording.tags,
         sourceType: recording.sourceType,
-        externalUrl: recording.externalUrl
+        externalUrl: recording.externalUrl,
+        date: recording.date // Include the date property
       };
     }
     
@@ -499,12 +578,10 @@ function HomePageContent() {
     
     if ('recording' in editingRecording) {
       // This format has a recording property with the ID
-      deleteRecording(); // Call without arguments as per the function signature
-      // Then separately update the UI if needed
+      deleteRecording();
       console.log('Deleted recording:', editingRecording.recording.id);
     } else if (editingRecording) {
-      // This is a direct recording object
-      deleteRecording(); // Call without arguments
+      deleteRecording();
       console.log('Deleted recording');
     }
   };

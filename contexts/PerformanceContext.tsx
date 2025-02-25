@@ -326,30 +326,46 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const deletePerformance = async (performanceId: string) => {
     try {
       const performance = performances.find(p => p.id === performanceId);
-      if (!performance) throw new Error('Performance not found');
-  
-      const res = await fetch('/api/delete', {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          type: 'performance',
-          performanceId,
-          performanceTitle: performance.title
-        }),
-      });
-  
-      if (!res.ok) {
-        throw new Error(`Failed to delete from Google Drive: ${res.statusText}`);
+      if (!performance) {
+        console.error('Cannot delete performance: Not found', performanceId);
+        throw new Error('Performance not found');
       }
-  
-      // Update local state
+
+      console.log('Deleting performance from local state:', performance.title);
+      
+      // Update local state first (offline-first approach)
       const updated = performances.filter((p) => p.id !== performanceId);
       updatePerformances(updated);
       setSelectedPerformanceId(updated.length > 0 ? updated[0].id : '');
       setEditingPerformance(null);
       setShowPerformanceForm(false);
+  
+      // Then try to delete from Google Drive
+      try {
+        console.log('Sending delete request to Google Drive API for performance:', performance.title);
+        const res = await fetch('/api/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            type: 'performance',
+            performanceId,
+            performanceTitle: performance.title
+          }),
+        });
+    
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error(`Failed to delete performance from Google Drive: ${res.status} ${res.statusText}`, errorText);
+          // We don't throw here because we've already updated the local state
+        } else {
+          console.log('Successfully deleted performance from Google Drive:', performance.title);
+        }
+      } catch (driveError) {
+        console.error('Error communicating with Google Drive API:', driveError);
+        // Don't rethrow, as we've already updated local state
+      }
     } catch (error) {
       console.error('Failed to delete performance:', error);
       throw error;

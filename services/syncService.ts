@@ -1,385 +1,421 @@
+import { v4 as uuidv4 } from 'uuid';
 import { videoStorage } from './videoStorage';
 import { Performance, Recording, Metadata } from '../types';
 
-interface SyncItem {
+export interface SyncQueueItem {
   id: string;
-  type: 'recording' | 'metadata' | 'delete';
   performanceId: string;
+  performanceTitle: string;
   rehearsalId: string;
-  data: any;
-  timestamp: number;
-  status: 'pending' | 'in_progress' | 'failed' | 'completed';
-  retryCount: number;
+  video: Blob;
+  thumbnail: Blob;
+  metadata: {
+    title: string;
+    time: string;
+    performers: string[];
+    notes?: string;
+    rehearsalId: string;
+    tags?: string[];
+    rehearsalTitle?: string;
+  };
+  createdAt: string;
+  attemptCount: number;
+  lastAttempt?: string;
   error?: string;
+  status: 'pending' | 'in-progress' | 'completed' | 'failed';
 }
 
-interface SyncStats {
-  pending: number;
-  inProgress: number;
-  failed: number;
-  completed: number;
-  lastSyncAttempt: string | null;
-  lastSuccessfulSync: string | null;
+interface SyncState {
+  queue: SyncQueueItem[];
+  lastSync: string | null;
+  lastSuccess: string | null;
   isOnline: boolean;
+  isSyncing: boolean;
 }
 
 class SyncService {
-  private syncQueue: SyncItem[] = [];
-  private isProcessing: boolean = false;
-  private syncStats: SyncStats = {
-    pending: 0,
-    inProgress: 0,
-    failed: 0,
-    completed: 0,
-    lastSyncAttempt: null,
-    lastSuccessfulSync: null,
-    isOnline: navigator.onLine
+  private state: SyncState = {
+    queue: [],
+    lastSync: null,
+    lastSuccess: null,
+    isOnline: true,
+    isSyncing: false,
   };
-  private listeners: Set<(stats: SyncStats) => void> = new Set();
-  private localOnly: boolean = true; // Set to true for local-only mode
+  private listeners: (() => void)[] = [];
+  private syncInterval: NodeJS.Timeout | null = null;
+  private initialized = false;
 
   constructor() {
-    // Load queue from local storage
-    this.loadQueue();
+    console.log('Sync service initializing');
+    this.loadFromStorage();
     
-    // Setup network listeners
-    window.addEventListener('online', this.handleNetworkChange);
-    window.addEventListener('offline', this.handleNetworkChange);
+    window.addEventListener('online', () => this.setOnlineStatus(true));
+    window.addEventListener('offline', () => this.setOnlineStatus(false));
     
-    // Process queue periodically
-    setInterval(() => this.processQueue(), 30000); // Every 30 seconds
+    // Check initial online status
+    this.setOnlineStatus(navigator.onLine);
   }
 
-  // Network status handler
-  private handleNetworkChange = () => {
-    this.syncStats.isOnline = navigator.onLine;
-    if (navigator.onLine) {
-      this.processQueue(); // Try to process queue when we come back online
-    }
-    this.notifyListeners();
-  };
-
-  // Load queue from localStorage
-  private loadQueue(): void {
+  private loadFromStorage() {
     try {
-      const savedQueue = localStorage.getItem('syncQueue');
-      if (savedQueue) {
-        this.syncQueue = JSON.parse(savedQueue);
-        this.updateStats();
-      }
-      
-      const savedStats = localStorage.getItem('syncStats');
-      if (savedStats) {
-        this.syncStats = {...this.syncStats, ...JSON.parse(savedStats)};
-      }
-    } catch (error) {
-      console.error('Failed to load sync queue:', error);
-    }
-  }
-
-  // Save queue to localStorage
-  private saveQueue(): void {
-    try {
-      localStorage.setItem('syncQueue', JSON.stringify(this.syncQueue));
-      this.updateStats();
-      localStorage.setItem('syncStats', JSON.stringify(this.syncStats));
-    } catch (error) {
-      console.error('Failed to save sync queue:', error);
-    }
-  }
-
-  // Update sync statistics
-  private updateStats(): void {
-    this.syncStats.pending = this.syncQueue.filter(item => item.status === 'pending').length;
-    this.syncStats.inProgress = this.syncQueue.filter(item => item.status === 'in_progress').length;
-    this.syncStats.failed = this.syncQueue.filter(item => item.status === 'failed').length;
-    this.syncStats.completed = this.syncQueue.filter(item => item.status === 'completed').length;
-    this.notifyListeners();
-  }
-
-  // Notify all registered listeners
-  private notifyListeners(): void {
-    this.listeners.forEach(listener => listener({...this.syncStats}));
-  }
-
-  // Subscribe to sync status updates
-  public subscribe(callback: (stats: SyncStats) => void): () => void {
-    this.listeners.add(callback);
-    callback({...this.syncStats}); // Initial call with current stats
-    return () => this.listeners.delete(callback);
-  }
-
-  // Process the sync queue
-  private async processQueue(): Promise<void> {
-    if (this.isProcessing) return;
-    
-    if (this.syncQueue.length === 0) {
-      this.updateStats();
-      return;
-    }
-    
-    // Update stats
-    this.syncStats.lastSyncAttempt = new Date().toISOString();
-    this.notifyListeners();
-    
-    this.isProcessing = true;
-    console.log(`Processing sync queue: ${this.syncQueue.length} items`);
-    
-    let processed = 0;
-    
-    try {
-      // Process only pending items
-      const pendingItems = this.syncQueue.filter(item => item.status === 'pending');
-      
-      for (const item of pendingItems) {
-        try {
-          // Mark as in progress
-          item.status = 'in_progress';
-          this.saveQueue();
-          this.updateStats();
-          
-          // Process based on type
-          if (item.type === 'recording') {
-            console.log(`Processing recording upload: ${item.data.metadata.title}`);
-            if (this.localOnly) {
-              // Simulate successful upload in local-only mode
-              console.log(`Local mode: Simulating successful upload for ${item.data.metadata.title}`);
-              await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
-            } else {
-              await this.syncRecording(item);
-            }
-          } else if (item.type === 'delete') {
-            console.log(`Processing deletion: ${item.data.type}`);
-            if (this.localOnly) {
-              // Simulate successful deletion in local-only mode
-              console.log(`Local mode: Simulating successful deletion`);
-              await new Promise(resolve => setTimeout(resolve, 300)); // Simulate network delay
-            } else {
-              await this.syncDeletion(item);
-            }
-          }
-          
-          // Mark as completed
-          item.status = 'completed';
-          processed++;
-          
-        } catch (error) {
-          console.error(`Sync failed for item ${item.id}:`, error);
-          
-          // Increment retry count
-          item.retryCount = (item.retryCount || 0) + 1;
-          
-          // Mark as failed if max retries exceeded
-          if (item.retryCount >= 3) {
-            item.status = 'failed';
-            item.error = error instanceof Error ? error.message : 'Unknown error';
-          } else {
-            item.status = 'pending'; // Retry later
+      const savedState = localStorage.getItem('syncState');
+      if (savedState) {
+        console.log('Loading sync state from storage');
+        
+        // Parse stored sync state
+        const parsedState = JSON.parse(savedState) as SyncState;
+        
+        // We need to handle queue specially because Blobs aren't serialized in localStorage
+        // Only keep the items that haven't been completed yet
+        this.state = {
+          ...parsedState,
+          queue: [],
+          isSyncing: false // Reset syncing status on load
+        };
+        
+        // Load queue from IndexedDB
+        const queuedItems = localStorage.getItem('syncQueue');
+        if (queuedItems) {
+          try {
+            const parsedItems = JSON.parse(queuedItems) as Omit<SyncQueueItem, 'video' | 'thumbnail'>[];
+            console.log(`Found ${parsedItems.length} items in sync queue`);
+            
+            // We don't restore the actual queue items with blobs here - just metadata
+            // The blobs are stored separately in IndexedDB
+            
+            this.state.queue = parsedItems.map(item => ({
+              ...item,
+              video: new Blob([], { type: 'video/mp4' }), // Placeholder blob
+              thumbnail: new Blob([], { type: 'image/jpeg' }), // Placeholder blob
+            }));
+            
+            console.log('Sync queue loaded (without actual blobs)');
+          } catch (e) {
+            console.error('Failed to parse sync queue:', e);
           }
         }
         
-        // Save queue after each item
-        this.saveQueue();
-        this.updateStats();
+        console.log('Sync state loaded:', {
+          queueLength: this.state.queue.length,
+          lastSync: this.state.lastSync,
+          lastSuccess: this.state.lastSuccess,
+          isOnline: this.state.isOnline
+        });
+      } else {
+        console.log('No saved sync state found, starting fresh');
       }
       
-      if (processed > 0) {
-        this.syncStats.lastSuccessfulSync = new Date().toISOString();
-        console.log(`Successfully processed ${processed} sync items`);
-      }
-      
-    } catch (error) {
-      console.error('Error processing sync queue:', error);
-    } finally {
-      this.isProcessing = false;
-      this.updateStats();
+      this.initialized = true;
+      this.notifyListeners();
+      this.startSyncInterval();
+    } catch (e) {
+      console.error('Failed to load sync state:', e);
     }
   }
 
-  // Force an immediate sync attempt
-  public async sync(): Promise<void> {
-    return this.processQueue();
+  private saveToStorage() {
+    try {
+      // Save basic sync state
+      const stateToSave = {
+        lastSync: this.state.lastSync,
+        lastSuccess: this.state.lastSuccess,
+        isOnline: this.state.isOnline,
+        isSyncing: false
+      };
+      
+      localStorage.setItem('syncState', JSON.stringify(stateToSave));
+      
+      // Save queue metadata (without blobs)
+      const queueMetadata = this.state.queue.map(item => {
+        const { video, thumbnail, ...rest } = item;
+        return rest;
+      });
+      
+      localStorage.setItem('syncQueue', JSON.stringify(queueMetadata));
+      console.log('Sync state saved to storage');
+    } catch (e) {
+      console.error('Failed to save sync state:', e);
+    }
   }
 
-  // Add a recording to the sync queue
-  public async queueRecording(
+  private setOnlineStatus(isOnline: boolean) {
+    if (this.state.isOnline !== isOnline) {
+      console.log(`Connection status changed: ${isOnline ? 'Online' : 'Offline'}`);
+      this.state.isOnline = isOnline;
+      this.notifyListeners();
+      this.saveToStorage();
+      
+      if (isOnline && this.getPendingCount() > 0) {
+        console.log('Back online with pending items, triggering sync');
+        this.sync();
+      }
+    }
+  }
+
+  private startSyncInterval() {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+    }
+    
+    // Sync every 5 minutes if there are pending items
+    this.syncInterval = setInterval(() => {
+      if (this.getPendingCount() > 0 && this.state.isOnline && !this.state.isSyncing) {
+        console.log('Auto-sync interval triggered with pending items');
+        this.sync();
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+    
+    console.log('Sync interval started - will check every 5 minutes');
+  }
+
+  public queueRecording(
     performanceId: string,
     performanceTitle: string,
     rehearsalId: string,
-    videoBlob: Blob,
-    thumbnailBlob: Blob,
+    video: Blob,
+    thumbnail: Blob,
     metadata: any
-  ): Promise<string> {
-    const recordingId = `rec-${Date.now()}`;
-    
-    const item: SyncItem = {
-      id: recordingId,
-      type: 'recording',
+  ) {
+    console.log('Queueing recording for sync:', {
       performanceId,
+      performanceTitle,
       rehearsalId,
-      data: {
-        videoBlob,
-        thumbnailBlob,
-        metadata: {
-          ...metadata,
-          id: recordingId,
-          status: 'pending_sync'
-        },
-        performanceTitle: performanceTitle
-      },
-      timestamp: Date.now(),
-      status: 'pending',
-      retryCount: 0
-    };
-
-    this.syncQueue.push(item);
-    this.saveQueue();
-
-    // If we're online, process the queue immediately
-    if (navigator.onLine) {
-      this.processQueue();
-    }
-
-    return recordingId;
-  }
-
-  // Add a metadata update to the sync queue
-  public async queueMetadataUpdate(
-    performanceId: string,
-    rehearsalId: string,
-    recordingId: string,
-    metadata: Partial<Metadata>
-  ): Promise<void> {
-    const item: SyncItem = {
-      id: `meta-${Date.now()}`,
-      type: 'metadata',
-      performanceId,
-      rehearsalId,
-      data: {
-        recordingId,
-        metadata
-      },
-      timestamp: Date.now(),
-      status: 'pending',
-      retryCount: 0
-    };
-
-    this.syncQueue.push(item);
-    this.saveQueue();
-
-    if (navigator.onLine) {
-      this.processQueue();
-    }
-  }
-
-  // Add a deletion to the sync queue
-  public async queueDeletion(
-    performanceId: string,
-    performanceTitle: string,
-    rehearsalId: string,
-    rehearsalTitle: string,
-    recordingId?: string,
-    recordingTitle?: string
-  ): Promise<void> {
-    const itemType = recordingId ? 'recording' : rehearsalId ? 'rehearsal' : 'performance';
-    
-    const item: SyncItem = {
-      id: `del-${Date.now()}`,
-      type: 'delete',
-      performanceId,
-      rehearsalId,
-      data: {
-        type: itemType,
-        performanceTitle,
-        rehearsalTitle,
-        recordingId,
-        recordingTitle
-      },
-      timestamp: Date.now(),
-      status: 'pending',
-      retryCount: 0
-    };
-
-    this.syncQueue.push(item);
-    this.saveQueue();
-
-    if (navigator.onLine) {
-      this.processQueue();
-    }
-  }
-
-  // Get current sync status information
-  public getStats(): SyncStats {
-    return {...this.syncStats};
-  }
-
-  // Sync a recording to the server
-  private async syncRecording(item: SyncItem): Promise<void> {
-    if (this.localOnly) {
-      console.log('Local-only mode: Simulating successful upload for:', item.data.metadata.title);
-      return Promise.resolve();
-    }
-
-    const { videoBlob, thumbnailBlob, metadata, performanceTitle } = item.data;
-    
-    const formData = new FormData();
-    formData.append('video', videoBlob, `${metadata.title}.mp4`);
-    formData.append('thumbnail', thumbnailBlob, `${metadata.title}_thumb.jpg`);
-    
-    formData.append('performanceId', item.performanceId);
-    formData.append('performanceTitle', performanceTitle);
-    formData.append('rehearsalId', item.rehearsalId);
-    formData.append('rehearsalTitle', metadata.rehearsalTitle || 'Rehearsal');
-    formData.append('recordingTitle', metadata.title);
-
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
+      videoSize: `${Math.round(video.size / 1024 / 1024 * 100) / 100}MB`,
+      thumbnailSize: `${Math.round(thumbnail.size / 1024)}KB`,
+      metadata
     });
     
-    if (!res.ok) {
-      throw new Error('Upload failed');
-    }
+    const item: SyncQueueItem = {
+      id: uuidv4(),
+      performanceId,
+      performanceTitle,
+      rehearsalId,
+      video,
+      thumbnail,
+      metadata,
+      createdAt: new Date().toISOString(),
+      attemptCount: 0,
+      status: 'pending'
+    };
     
-    return res.json();
+    this.state.queue.push(item);
+    this.notifyListeners();
+    this.saveToStorage();
+    
+    console.log('Item added to sync queue, current queue size:', this.state.queue.length);
+    
+    // Try to sync immediately if online
+    if (this.state.isOnline && !this.state.isSyncing) {
+      console.log('Online and not syncing, triggering immediate sync');
+      this.sync();
+    } else {
+      console.log('Not syncing immediately:', {
+        isOnline: this.state.isOnline,
+        isSyncing: this.state.isSyncing
+      });
+    }
   }
 
-  // Sync metadata changes to the server
-  private async syncMetadata(item: SyncItem): Promise<void> {
-    // This would be implemented with a new API endpoint
-    const res = await fetch('/api/update-metadata', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        performanceId: item.performanceId,
-        rehearsalId: item.rehearsalId,
-        recordingId: item.data.recordingId,
-        metadata: item.data.metadata
-      }),
-    });
-    
-    if (!res.ok) {
-      throw new Error('Metadata update failed');
+  public async sync() {
+    if (this.state.isSyncing) {
+      console.log('Sync already in progress, skipping');
+      return;
     }
     
-    return res.json();
+    if (!this.state.isOnline) {
+      console.log('Offline, cannot sync');
+      return;
+    }
+    
+    const pendingItems = this.state.queue.filter(item => item.status === 'pending');
+    if (pendingItems.length === 0) {
+      console.log('No pending items to sync');
+      return;
+    }
+    
+    console.log(`Starting sync of ${pendingItems.length} items`);
+    this.state.isSyncing = true;
+    this.state.lastSync = new Date().toISOString();
+    this.notifyListeners();
+    this.saveToStorage();
+    
+    let syncSuccess = false;
+    
+    for (const item of pendingItems) {
+      if (!this.state.isOnline) {
+        console.log('Connection lost during sync, stopping');
+        break;
+      }
+      
+      console.log(`Processing item ${item.id}: "${item.metadata.title}"`);
+      
+      // Update item status
+      item.status = 'in-progress';
+      item.lastAttempt = new Date().toISOString();
+      item.attemptCount++;
+      delete item.error;
+      this.notifyListeners();
+      
+      try {
+        console.log('Creating form data for upload');
+        const formData = new FormData();
+        formData.append('video', item.video, `${item.metadata.title}.mp4`);
+        formData.append('thumbnail', item.thumbnail, `${item.metadata.title}_thumb.jpg`);
+        formData.append('performanceId', item.performanceId);
+        formData.append('performanceTitle', item.performanceTitle);
+        formData.append('rehearsalId', item.rehearsalId);
+        formData.append('rehearsalTitle', item.metadata.rehearsalTitle || 'Untitled Rehearsal');
+        formData.append('recordingTitle', item.metadata.title);
+        formData.append('recordingMetadata', JSON.stringify(item.metadata));
+        
+        console.log('Sending upload request to server');
+        console.log('Upload details:', {
+          performanceId: item.performanceId,
+          performanceTitle: item.performanceTitle,
+          rehearsalId: item.rehearsalId,
+          rehearsalTitle: item.metadata.rehearsalTitle,
+          recordingTitle: item.metadata.title,
+          videoSize: `${Math.round(item.video.size / 1024 / 1024 * 100) / 100}MB`
+        });
+        
+        // Test the API endpoint before sending the full request
+        console.log('Testing API endpoint with a ping');
+        const pingRes = await fetch('/api/ping', {
+          method: 'GET',
+        });
+        
+        if (!pingRes.ok) {
+          console.error('API endpoint test failed:', pingRes.status, pingRes.statusText);
+          throw new Error(`API endpoint test failed: ${pingRes.status} ${pingRes.statusText}`);
+        }
+        
+        console.log('API endpoint test succeeded, proceeding with upload');
+        
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error('Upload failed:', {
+            status: res.status,
+            statusText: res.statusText, 
+            error: errorText
+          });
+          throw new Error(`Upload failed: ${res.status} ${res.statusText} - ${errorText}`);
+        }
+        
+        const result = await res.json();
+        console.log('Upload successful:', result);
+        
+        // Mark item as completed
+        item.status = 'completed';
+        this.state.lastSuccess = new Date().toISOString();
+        syncSuccess = true;
+      } catch (error) {
+        console.error('Sync error for item:', item.id, error);
+        item.status = 'failed';
+        item.error = error instanceof Error ? error.message : String(error);
+      }
+      
+      this.notifyListeners();
+      this.saveToStorage();
+    }
+    
+    // Clean up completed items
+    this.state.queue = this.state.queue.filter(item => item.status !== 'completed');
+    
+    this.state.isSyncing = false;
+    this.notifyListeners();
+    this.saveToStorage();
+    
+    console.log('Sync completed', {
+      success: syncSuccess,
+      pendingCount: this.getPendingCount(),
+      failedCount: this.getFailedCount()
+    });
+    
+    return syncSuccess;
   }
 
-  // Sync deletion to the server
-  private async syncDeletion(item: SyncItem): Promise<void> {
-    const res = await fetch('/api/delete', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(item.data),
+  public getPendingCount() {
+    return this.state.queue.filter(item => item.status === 'pending').length;
+  }
+
+  public getInProgressCount() {
+    return this.state.queue.filter(item => item.status === 'in-progress').length;
+  }
+
+  public getFailedCount() {
+    return this.state.queue.filter(item => item.status === 'failed').length;
+  }
+  
+  public getFailedItems() {
+    return this.state.queue.filter(item => item.status === 'failed');
+  }
+
+  public getLastSync() {
+    return this.state.lastSync;
+  }
+
+  public getLastSuccess() {
+    return this.state.lastSuccess;
+  }
+
+  public isOnline() {
+    return this.state.isOnline;
+  }
+
+  public isSyncing() {
+    return this.state.isSyncing;
+  }
+
+  public clearFailedItems() {
+    console.log('Clearing failed sync items');
+    this.state.queue = this.state.queue.filter(item => item.status !== 'failed');
+    this.notifyListeners();
+    this.saveToStorage();
+  }
+
+  public retryFailedItems() {
+    console.log('Retrying failed sync items');
+    this.state.queue.forEach(item => {
+      if (item.status === 'failed') {
+        item.status = 'pending';
+        delete item.error;
+      }
     });
+    this.notifyListeners();
+    this.saveToStorage();
     
-    if (!res.ok) {
-      throw new Error('Deletion failed');
+    if (this.state.isOnline) {
+      this.sync();
     }
-    
-    return res.json();
+  }
+
+  public getState() {
+    return {
+      pendingCount: this.getPendingCount(),
+      inProgressCount: this.getInProgressCount(),
+      failedCount: this.getFailedCount(),
+      lastSync: this.state.lastSync,
+      lastSuccess: this.state.lastSuccess,
+      isOnline: this.state.isOnline,
+      isSyncing: this.state.isSyncing,
+    };
+  }
+
+  public subscribe(listener: () => void) {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  private notifyListeners() {
+    this.listeners.forEach(listener => listener());
   }
 }
 
-// Export a singleton instance
 export const syncService = new SyncService();

@@ -12,37 +12,108 @@ interface ExpandedState {
 
 const TodaysRecordings: React.FC = () => {
   const { performances, openVideoPlayer, openMetadataForm } = usePerformances();
-  const [todaysRecordings, setTodaysRecordings] = useState<Recording[]>([]);
   const [expandedState, setExpandedState] = useState<ExpandedState>({});
   
-  useEffect(() => {
-    // Extract all recordings from all performances
-    console.log('Gathering today\'s recordings');
-    const allRecordings: Recording[] = [];
-    
-    performances.forEach(performance => {
-      performance.rehearsals.forEach(rehearsal => {
-        if (rehearsal.recordings && rehearsal.recordings.length > 0) {
-          console.log(`Found ${rehearsal.recordings.length} recordings in rehearsal: ${rehearsal.title}`);
-          rehearsal.recordings.forEach(recording => {
-            // Check if the recording is from today
-            if (recording.date === getTodayFormatted()) {
-              allRecordings.push(recording);
-            }
-          });
-        }
-      });
-    });
-    
-    setTodaysRecordings(allRecordings);
-  }, [performances]);
+  // Get today's date in the same format as recording dates
+  const today = new Date().toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric'
+  }).replace(/\//g, '-');
   
-  function getTodayFormatted() {
-    const today = new Date();
-    const dd = today.getDate().toString().padStart(2, '0');
-    const mm = (today.getMonth() + 1).toString().padStart(2, '0');
-    const yyyy = today.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
+  console.log('Today\'s date for comparison:', today);
+  
+  // Collect all recordings across all performances and rehearsals
+  const allRecordings = performances.flatMap(performance => 
+    performance.rehearsals.flatMap(rehearsal => 
+      rehearsal.recordings.map(recording => ({
+        ...recording,
+        performanceTitle: performance.title,
+        rehearsalTitle: rehearsal.title
+      }))
+    )
+  );
+  
+  console.log('All recordings found:', allRecordings.length);
+  
+  // Normalize date format function to handle different date formats
+  const normalizeDateFormat = (dateStr: string): string => {
+    if (!dateStr) return '';
+    
+    // Already in correct format (DD-MM-YYYY)
+    if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+      return dateStr;
+    }
+    
+    // Handle ISO date strings (YYYY-MM-DDTHH:MM:SS.sssZ) properly
+    if (dateStr.includes('T') && (dateStr.includes('Z') || dateStr.includes('+'))) {
+      try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        }).replace(/\//g, '-');
+      } catch (e) {
+        console.error('Failed to parse ISO date:', dateStr);
+      }
+    }
+    
+    // Try to parse and reformat other date formats
+    try {
+      const parts = dateStr.split(/[-\/\.]/);
+      // Check if in YYYY-MM-DD format
+      if (parts.length >= 3 && parts[0].length === 4) {
+        return `${parts[2].split('T')[0].padStart(2, '0')}-${parts[1].padStart(2, '0')}-${parts[0]}`;
+      }
+      // Otherwise assume MM-DD-YYYY
+      if (parts.length >= 3) {
+        return `${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}-${parts[2]}`;
+      }
+    } catch (e) {
+      console.error('Failed to normalize date format for:', dateStr);
+    }
+    
+    // If all else fails, try direct Date conversion
+    try {
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleDateString('en-GB', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric'
+        }).replace(/\//g, '-');
+      }
+    } catch (e) {
+      console.error('Failed final date conversion attempt for:', dateStr);
+    }
+    
+    return dateStr;
+  };
+  
+  // Filter for today's recordings only
+  const todaysRecordings = allRecordings.filter(recording => {
+    // Check if date exists
+    if (!recording.date) {
+      console.log(`Recording ${recording.id} has no date`);
+      return false;
+    }
+    
+    // Normalize recording date format
+    const normalizedRecordingDate = normalizeDateFormat(recording.date);
+    
+    console.log(`Comparing recording date: "${recording.date}" (normalized: "${normalizedRecordingDate}") with today: "${today}"`);
+    
+    const isToday = normalizedRecordingDate === today;
+    if (isToday) {
+      console.log(`✅ MATCHED recording ID ${recording.id}: "${recording.title}"`);
+    }
+    return isToday;
+  });
+  
+  console.log('Today\'s recordings count:', todaysRecordings.length);
+  if (todaysRecordings.length > 0) {
+    console.log('Today\'s recordings:', todaysRecordings.map(r => ({ id: r.id, title: r.title, date: r.date })));
   }
   
   // Find rehearsal ID for a recording
@@ -136,7 +207,7 @@ const TodaysRecordings: React.FC = () => {
                 <h5 className="font-medium text-gray-900 text-sm truncate">{recording.title}</h5>
                 <div className="text-xs text-gray-500 flex items-center mt-1">
                   <Clock size={10} className="mr-1 flex-shrink-0" />
-                  <span>{recording.time || 'No time'}</span>
+                  <span className="text-sm text-gray-500">{recording.time}</span>
                 </div>
               </div>
               
