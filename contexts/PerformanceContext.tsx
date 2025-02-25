@@ -1,9 +1,11 @@
 // contexts/PerformanceContext.tsx
 'use client';
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Performance, Rehearsal, Recording, Metadata } from '../types';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react';
+import { Performance, Rehearsal, Recording, Metadata, Collection } from '../types';
 import { videoStorage } from '../services/videoStorage';
+import { syncService } from '../services/syncService';
+import { generateId } from '../lib/utils';
 
 interface PerformanceContextType {
   // State
@@ -21,6 +23,11 @@ interface PerformanceContextType {
   recordingTargetRehearsalId: string | null;
   preRecordingMetadata: Metadata | null;
   videoToWatch: { recording: Recording; videoUrl: string } | null;
+  
+  // Add these missing state setters
+  setShowRecorder: (show: boolean) => void;
+  setPreRecordingMetadata: (metadata: Metadata | null) => void;
+  setRecordingTargetRehearsalId: (id: string | null) => void;
   
   // Computed Properties
   selectedPerformance: Performance | undefined;
@@ -52,10 +59,22 @@ interface PerformanceContextType {
   addRehearsal: (data: { title: string; location: string; date: string }) => void;
   updateRehearsal: (data: { title: string; location: string; date: string }) => void;
   deleteRehearsal: () => Promise<void>;
-  addRecording: (videoBlob: Blob, thumbnail: string | Blob, metadata: Metadata) => Promise<void>;
+  addRecording: (rehearsalId: string, videoBlob: Blob, thumbnailBlob: Blob, metadata: Metadata) => Promise<string>;
   updateRecordingMetadata: (metadata: Metadata) => void;
   deleteRecording: () => Promise<void>;
   handlePreRecordingMetadataSubmit: (metadata: Metadata) => void;
+  collections: Collection[];
+  createCollection: (data: { title: string; description?: string }) => void;
+  updateCollection: (id: string, data: { title: string; description?: string }) => void;
+  deleteCollection: (id: string) => void;
+  addToCollection: (collectionId: string, recordingId: string) => void;
+  removeFromCollection: (collectionId: string, recordingId: string) => void;
+  
+  // State setters
+  setPerformances: React.Dispatch<React.SetStateAction<Performance[]>>;
+  
+  // New properties
+  handleExternalVideoLink: (metadata: Metadata & { externalUrl: string }) => void;
 }
 
 const PerformanceContext = createContext<PerformanceContextType | undefined>(undefined);
@@ -76,6 +95,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const [editingPerformance, setEditingPerformance] = useState<Performance | null>(null);
   const [showRehearsalForm, setShowRehearsalForm] = useState<boolean>(false);
   const [editingRehearsal, setEditingRehearsal] = useState<{ performanceId: string; rehearsal: Rehearsal } | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
 
   // Initialize performances from localStorage
   useEffect(() => {
@@ -94,6 +114,23 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     localStorage.setItem('performances', JSON.stringify(performances));
   }, [performances]);
 
+  // Load collections from localStorage
+  useEffect(() => {
+    const savedCollections = localStorage.getItem('collections');
+    if (savedCollections) {
+      try {
+        setCollections(JSON.parse(savedCollections));
+      } catch (e) {
+        console.error('Failed to parse collections from localStorage', e);
+      }
+    }
+  }, []);
+
+  // Save collections to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('collections', JSON.stringify(collections));
+  }, [collections]);
+
   // Helper function to update performances state
   const updatePerformances = (newPerformances: Performance[]) => {
     setPerformances(newPerformances);
@@ -104,7 +141,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const selectedPerformance = performances.find((p) => p.id === selectedPerformanceId);
 
   // Get today's recordings
-  const todaysRecordings = React.useMemo(() => {
+  const todaysRecordings = useMemo(() => {
     const today = new Date().toISOString().split('T')[0]; // Format as YYYY-MM-DD
     const result: Recording[] = [];
     
@@ -124,7 +161,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   }, [performances]);
 
   // Filter recordings based on search query
-  const filteredRecordings = React.useMemo(() => {
+  const filteredRecordings = useMemo(() => {
     if (!searchQuery.trim() || !selectedPerformance) return [];
     
     const result: Recording[] = [];
@@ -213,21 +250,60 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   // Pre-recording metadata handler
   const handlePreRecordingMetadataSubmit = (metadata: Metadata) => {
+    console.log('Pre-recording metadata submitted:', metadata);
+    
+    // Ensure rehearsalId is set
+    if (!metadata.rehearsalId) {
+      console.error('Missing rehearsalId in metadata');
+      return;
+    }
+    
+    // Find the rehearsal to validate it exists
+    const performanceId = findPerformanceIdByRehearsalId(metadata.rehearsalId);
+    const performance = performances.find(p => p.id === performanceId);
+    
+    if (!performance) {
+      console.error('Performance not found for rehearsal', metadata.rehearsalId);
+      return;
+    }
+    
+    const rehearsal = performance.rehearsals.find(r => r.id === metadata.rehearsalId);
+    if (!rehearsal) {
+      console.error('Rehearsal not found', metadata.rehearsalId);
+      return;
+    }
+    
+    console.log(`Recording will be added to rehearsal "${rehearsal.title}" in performance "${performance.title}"`);
+    
+    // Set state for recording process
     setPreRecordingMetadata(metadata);
     setShowPreRecordingMetadataForm(false);
-    setShowRecorder(true);
     setRecordingTargetRehearsalId(metadata.rehearsalId);
+    setShowRecorder(true);
   };
 
   // CRUD operations
   const addPerformance = (data: { title: string; defaultPerformers: string[] }) => {
+    console.log('Adding performance:', data);
+    
+    // Validate data
+    if (!data.title) {
+      console.error('Cannot add performance: Title is required');
+      return;
+    }
+
     const newPerformance = {
       id: 'perf-' + Date.now(),
       title: data.title,
-      defaultPerformers: data.defaultPerformers,
+      defaultPerformers: data.defaultPerformers || [],
       rehearsals: [],
     };
+    
+    console.log('New performance object:', newPerformance);
+    
     const updated = [...performances, newPerformance];
+    console.log('Updated performances array:', updated);
+    
     updatePerformances(updated);
     setSelectedPerformanceId(newPerformance.id);
     setShowPerformanceForm(false);
@@ -366,16 +442,16 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   // Upload to Google Drive
-  async function uploadToDrive(videoBlob: Blob, thumbnail: Blob, metadata: Metadata) {
+  async function uploadToDrive(videoBlob: Blob, thumbnail: Blob | string, metadata: Metadata) {
     const formData = new FormData();
     formData.append('video', videoBlob, `${metadata.title}.mp4`);
-    formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
     
     // If thumbnail is a string (base64), convert to Blob
+    let thumbnailBlob: Blob;
     if (typeof thumbnail === 'string') {
       const response = await fetch(thumbnail);
-      const thumbBlob = await response.blob();
-      formData.append('thumbnail', thumbBlob, `${metadata.title}_thumb.jpg`);
+      thumbnailBlob = await response.blob();
+      formData.append('thumbnail', thumbnailBlob, `${metadata.title}_thumb.jpg`);
     } else {
       formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
     }
@@ -407,69 +483,139 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   }
 
   // Add recording (from any source)
-  const addRecording = async (videoBlob: Blob, thumbnail: string | Blob, metadata: Metadata) => {
+  const addRecording = async (
+    rehearsalId: string,
+    videoBlob: Blob,
+    thumbnailBlob: Blob,
+    metadata: Metadata
+  ): Promise<string> => {
+    console.log('Adding recording:', { rehearsalId, metadata });
+    
+    if (!rehearsalId) {
+      console.error('Cannot add recording: Missing rehearsalId');
+      throw new Error('Missing rehearsalId');
+    }
+
     try {
-      // Convert thumbnail string to Blob if it's a string (base64 data URL)
-      let thumbnailBlob: Blob;
-      if (typeof thumbnail === 'string') {
-        const response = await fetch(thumbnail);
-        thumbnailBlob = await response.blob();
-      } else {
-        thumbnailBlob = thumbnail;
+      // Find performance ID
+      const performanceId = findPerformanceIdByRehearsalId(rehearsalId);
+      if (!performanceId) {
+        throw new Error('Could not find performance for rehearsal');
       }
       
-      // Upload to Google Drive
-      const uploaded = await uploadToDrive(videoBlob, thumbnailBlob, metadata);
+      // Generate URLs for video and thumbnail
+      const videoUrl = URL.createObjectURL(videoBlob);
+      const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
       
-      // Create new recording object
+      console.log('Generated URLs:', { videoUrl, thumbnailUrl });
+
+      // Find the performance and rehearsal
+      const performance = performances.find(p => p.id === performanceId);
+      
+      if (!performance) {
+        console.error('Cannot add recording: Performance not found for rehearsal', rehearsalId);
+        throw new Error('Performance not found');
+      }
+      
+      const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
+      if (!rehearsal) {
+        console.error('Cannot add recording: Rehearsal not found', rehearsalId);
+        throw new Error('Rehearsal not found');
+      }
+      
+      console.log('Found performance and rehearsal:', { 
+        performanceId, 
+        performanceTitle: performance.title,
+        rehearsalId,
+        rehearsalTitle: rehearsal.title
+      });
+
+      // Create recording object with full metadata
       const newRecording: Recording = {
-        id: Date.now().toString(),
-        title: metadata.title,
-        time: metadata.time,
-        performers: metadata.performers,
+        id: 'rec-' + Date.now(),
+        title: metadata.title || 'Untitled Recording',
+        time: metadata.time || new Date().toLocaleTimeString(),
+        performers: metadata.performers || [],
         notes: metadata.notes,
-        rehearsalId: metadata.rehearsalId,
-        videoUrl: uploaded.videoUrl,
-        thumbnailUrl: typeof thumbnail === 'string' ? thumbnail : URL.createObjectURL(thumbnail),
-        tags: metadata.tags,
+        rehearsalId: rehearsalId,
+        videoUrl: videoUrl,
+        thumbnailUrl: thumbnailUrl,
+        tags: metadata.tags || [],
         sourceType: 'recorded',
+        localCopyAvailable: true,
         createdAt: new Date().toISOString(),
+        syncStatus: 'pending',
+        performanceTitle: performance.title,
+        rehearsalTitle: rehearsal.title,
+        date: new Date().toISOString(),
       };
       
-      // Store video in local storage for faster playback
+      console.log('Created new recording object:', newRecording);
+
+      // Update rehearsal with new recording
+      const updatedRehearsals = rehearsal.recordings
+        ? [...rehearsal.recordings, newRecording]
+        : [newRecording];
+        
+      const updatedRehearsal = {
+        ...rehearsal,
+        recordings: updatedRehearsals
+      };
+      
+      // Update performance with updated rehearsal
+      const updatedPerformance = {
+        ...performance,
+        rehearsals: performance.rehearsals.map(r => 
+          r.id === rehearsalId ? updatedRehearsal : r
+        )
+      };
+      
+      // Update performances state
+      const updatedPerformances = performances.map(p => 
+        p.id === performanceId ? updatedPerformance : p
+      );
+      
+      console.log('Updating performances with new recording');
+      updatePerformances(updatedPerformances);
+      
+      // Save video to local storage
       await videoStorage.saveVideo(
         newRecording.id,
         videoBlob,
-        typeof thumbnail === 'string' ? await (await fetch(thumbnail)).blob() : thumbnail,
+        thumbnailBlob,
         {
-          title: metadata.title,
-          performanceId: selectedPerformanceId,
-          rehearsalId: metadata.rehearsalId,
-          createdAt: newRecording.createdAt || new Date().toISOString(),
-          performers: metadata.performers,
-          tags: metadata.tags,
+          title: newRecording.title,
+          performanceId: performanceId!,
+          rehearsalId,
+          createdAt: new Date().toISOString(),
+          performers: newRecording.performers,
+          tags: newRecording.tags
         }
       );
+      console.log('Video saved to local storage');
       
-      // Update performances state
-      const updated = performances.map((perf) => {
-        if (perf.id === selectedPerformanceId) {
-          const updatedRehearsals = perf.rehearsals.map((reh) => {
-            if (reh.id === metadata.rehearsalId) {
-              return { ...reh, recordings: [...reh.recordings, newRecording] };
-            }
-            return reh;
-          });
-          return { ...perf, rehearsals: updatedRehearsals };
+      // Queue for server sync
+      syncService.queueRecording(
+        performanceId!,
+        performance.title,
+        rehearsalId,
+        videoBlob,
+        thumbnailBlob,
+        {
+          title: newRecording.title,
+          time: newRecording.time,
+          performers: newRecording.performers,
+          notes: newRecording.notes,
+          rehearsalId: newRecording.rehearsalId,
+          tags: newRecording.tags,
+          rehearsalTitle: rehearsal.title
         }
-        return perf;
-      });
+      );
+      console.log('Recording queued for sync');
       
-      updatePerformances(updated);
-      setPreRecordingMetadata(null);
-      setShowRecorder(false);
+      return newRecording.id;
     } catch (error) {
-      console.error('Upload failed', error);
+      console.error('Error adding recording:', error);
       throw error;
     }
   };
@@ -561,6 +707,125 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
+  // Collections functions
+  const createCollection = (data: { title: string; description?: string }) => {
+    const newCollection: Collection = {
+      id: generateId('col'),
+      title: data.title,
+      description: data.description,
+      recordingIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    setCollections(prev => [...prev, newCollection]);
+  };
+
+  const updateCollection = (id: string, data: { title: string; description?: string }) => {
+    setCollections(prev => 
+      prev.map(collection => 
+        collection.id === id 
+          ? { 
+              ...collection, 
+              ...data, 
+              updatedAt: new Date().toISOString() 
+            } 
+          : collection
+      )
+    );
+  };
+
+  const deleteCollection = (id: string) => {
+    setCollections(prev => prev.filter(collection => collection.id !== id));
+  };
+
+  const addToCollection = (collectionId: string, recordingId: string) => {
+    setCollections(prev => 
+      prev.map(collection => 
+        collection.id === collectionId && !collection.recordingIds.includes(recordingId)
+          ? { 
+              ...collection, 
+              recordingIds: [...collection.recordingIds, recordingId],
+              updatedAt: new Date().toISOString() 
+            } 
+          : collection
+      )
+    );
+  };
+
+  const removeFromCollection = (collectionId: string, recordingId: string) => {
+    setCollections(prev => 
+      prev.map(collection => 
+        collection.id === collectionId
+          ? { 
+              ...collection, 
+              recordingIds: collection.recordingIds.filter(id => id !== recordingId),
+              updatedAt: new Date().toISOString() 
+            } 
+          : collection
+      )
+    );
+  };
+
+  // Add this function inside the PerformanceProvider component
+  const findPerformanceIdByRehearsalId = (rehearsalId: string): string | undefined => {
+    console.log('Finding performance for rehearsal ID:', rehearsalId);
+    
+    for (const performance of performances) {
+      for (const rehearsal of performance.rehearsals) {
+        if (rehearsal.id === rehearsalId) {
+          console.log(`Found performance: ${performance.id} for rehearsal: ${rehearsalId}`);
+          return performance.id;
+        }
+      }
+    }
+    
+    console.error(`No performance found for rehearsal ID: ${rehearsalId}`);
+    return undefined;
+  };
+
+  // New function to handle external video links
+  const handleExternalVideoLink = (metadata: Metadata & { externalUrl: string }) => {
+    const { rehearsalId, externalUrl, ...metadataWithoutUrl } = metadata;
+    
+    // Create a new recording with the external URL
+    const newRecordingId = generateId('rec');
+    const newRecording: Recording = {
+      id: newRecordingId,
+      title: metadata.title,
+      time: metadata.time,
+      date: new Date().toISOString(),
+      performers: metadata.performers,
+      notes: metadata.notes,
+      tags: metadata.tags,
+      isExternalLink: true,
+      externalUrl: externalUrl,
+      rehearsalId: rehearsalId,
+      videoUrl: "",
+      thumbnailUrl: '',
+    };
+    
+    // Add the recording to the appropriate rehearsal
+    setPerformances(prevPerformances => {
+      return prevPerformances.map(performance => {
+        const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
+        if (rehearsal) {
+          const updatedRehearsal = {
+            ...rehearsal,
+            recordings: [...rehearsal.recordings, newRecording]
+          };
+          return {
+            ...performance,
+            rehearsals: performance.rehearsals.map(r => 
+              r.id === rehearsalId ? updatedRehearsal : r
+            )
+          };
+        }
+        return performance;
+      });
+    });
+  };
+
   return (
     <PerformanceContext.Provider
       value={{
@@ -579,6 +844,11 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         recordingTargetRehearsalId,
         preRecordingMetadata,
         videoToWatch,
+        
+        // Add these state setters
+        setShowRecorder,
+        setPreRecordingMetadata,
+        setRecordingTargetRehearsalId,
         
         // Computed Properties
         selectedPerformance,
@@ -614,6 +884,18 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         updateRecordingMetadata,
         deleteRecording,
         handlePreRecordingMetadataSubmit,
+        collections,
+        createCollection,
+        updateCollection,
+        deleteCollection,
+        addToCollection,
+        removeFromCollection,
+        
+        // State setters
+        setPerformances,
+        
+        // New property
+        handleExternalVideoLink,
       }}
     >
       {children}

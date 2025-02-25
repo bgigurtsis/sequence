@@ -3,6 +3,7 @@ export interface Recording {
     id: string;
     title: string;
     time: string;
+    date: string;
     performers: string[];
     notes?: string;
     rehearsalId: string; // This is required and should be present
@@ -12,6 +13,12 @@ export interface Recording {
     sourceType?: 'recorded' | 'uploaded' | 'external';
     localCopyAvailable?: boolean;
     createdAt?: string;
+    syncStatus?: 'pending' | 'synced' | 'failed';
+    performanceTitle?: string;
+    rehearsalTitle?: string;
+    isExternalLink?: boolean;
+    externalUrl?: string;
+    domain?: string;
   }
   
   
@@ -21,6 +28,8 @@ export interface Recording {
     location: string;
     date: string;
     recordings: Recording[];
+    performanceId?: string;
+    performanceTitle?: string;
   }
   
   export interface Performance {
@@ -37,6 +46,10 @@ export interface Recording {
     notes?: string;
     rehearsalId: string;
     tags: string[];
+    fileName?: string;
+    sourceType?: 'recorded' | 'uploaded' | 'external';
+    externalUrl?: string;
+    domain?: string;
   }
   
   export interface PendingVideo {
@@ -57,4 +70,13 @@ export interface Recording {
       performers: string[];
       tags: string[];
     };
+  }
+
+  export interface Collection {
+    id: string;
+    title: string;
+    description?: string;
+    recordingIds: string[];
+    createdAt: string;
+    updatedAt: string;
   }
