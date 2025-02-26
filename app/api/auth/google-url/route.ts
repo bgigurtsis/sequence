@@ -19,6 +19,8 @@ export async function GET() {
     const url = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: [
+        'https://www.googleapis.com/auth/userinfo.profile',
+        'https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/drive.file',
         'https://www.googleapis.com/auth/drive.metadata.readonly'
       ],
@@ -33,4 +35,4 @@ export async function GET() {
       { status: 500 }
     );
   }
-} 
+}

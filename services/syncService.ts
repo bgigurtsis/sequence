@@ -19,10 +19,11 @@ export interface SyncQueueItem {
     rehearsalTitle?: string;
   };
   createdAt: string;
+
   attemptCount: number;
   lastAttempt?: string;
   error?: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'failed';
+  status: 'pending' | 'in-progress' | 'syncing' | 'completed' | 'failed';
 }
 
 interface SyncState {
@@ -47,16 +48,26 @@ class SyncService {
 
   constructor() {
     console.log('Sync service initializing');
-    this.loadFromStorage();
     
-    window.addEventListener('online', () => this.setOnlineStatus(true));
-    window.addEventListener('offline', () => this.setOnlineStatus(false));
-    
-    // Check initial online status
-    this.setOnlineStatus(navigator.onLine);
+    // Only proceed with client-side operations
+    if (typeof window !== 'undefined') {
+      this.loadFromStorage();
+      
+      window.addEventListener('online', () => this.setOnlineStatus(true));
+      window.addEventListener('offline', () => this.setOnlineStatus(false));
+      
+      // Check initial online status
+      this.setOnlineStatus(navigator.onLine);
+      
+      // Start sync service
+      this.startSyncService();
+    }
   }
 
   private loadFromStorage() {
+    // Only run on client side
+    if (typeof window === 'undefined') return;
+    
     try {
       const savedState = localStorage.getItem('syncState');
       if (savedState) {
@@ -66,50 +77,14 @@ class SyncService {
         const parsedState = JSON.parse(savedState) as SyncState;
         
         // We need to handle queue specially because Blobs aren't serialized in localStorage
-        // Only keep the items that haven't been completed yet
+        // Safely handle the case where queue might be undefined
         this.state = {
           ...parsedState,
-          queue: [],
-          isSyncing: false // Reset syncing status on load
+          queue: parsedState.queue ? parsedState.queue.filter(item => item.status !== 'completed') : []
         };
-        
-        // Load queue from IndexedDB
-        const queuedItems = localStorage.getItem('syncQueue');
-        if (queuedItems) {
-          try {
-            const parsedItems = JSON.parse(queuedItems) as Omit<SyncQueueItem, 'video' | 'thumbnail'>[];
-            console.log(`Found ${parsedItems.length} items in sync queue`);
-            
-            // We don't restore the actual queue items with blobs here - just metadata
-            // The blobs are stored separately in IndexedDB
-            
-            this.state.queue = parsedItems.map(item => ({
-              ...item,
-              video: new Blob([], { type: 'video/mp4' }), // Placeholder blob
-              thumbnail: new Blob([], { type: 'image/jpeg' }), // Placeholder blob
-            }));
-            
-            console.log('Sync queue loaded (without actual blobs)');
-          } catch (e) {
-            console.error('Failed to parse sync queue:', e);
-          }
-        }
-        
-        console.log('Sync state loaded:', {
-          queueLength: this.state.queue.length,
-          lastSync: this.state.lastSync,
-          lastSuccess: this.state.lastSuccess,
-          isOnline: this.state.isOnline
-        });
-      } else {
-        console.log('No saved sync state found, starting fresh');
       }
-      
-      this.initialized = true;
-      this.notifyListeners();
-      this.startSyncInterval();
-    } catch (e) {
-      console.error('Failed to load sync state:', e);
+    } catch (error) {
+      console.error('Failed to load sync state:', error);
     }
   }
 
@@ -152,20 +127,24 @@ class SyncService {
     }
   }
 
-  private startSyncInterval() {
+  private startSyncService() {
+    console.log('Starting sync service');
+    
+    // Run initial sync check
+    if (this.state.isOnline) {
+      this.sync();
+    }
+    
+    // Set up interval for periodic sync attempts
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
     }
     
-    // Sync every 5 minutes if there are pending items
     this.syncInterval = setInterval(() => {
-      if (this.getPendingCount() > 0 && this.state.isOnline && !this.state.isSyncing) {
-        console.log('Auto-sync interval triggered with pending items');
+      if (this.state.isOnline && !this.state.isSyncing) {
         this.sync();
       }
-    }, 5 * 60 * 1000); // 5 minutes
-    
-    console.log('Sync interval started - will check every 5 minutes');
+    }, 60000); // Check every minute
   }
 
   public queueRecording(
@@ -222,96 +201,67 @@ class SyncService {
       return;
     }
     
-    if (!this.state.isOnline) {
-      console.log('Offline, cannot sync');
-      return;
-    }
-    
     const pendingItems = this.state.queue.filter(item => item.status === 'pending');
     if (pendingItems.length === 0) {
       console.log('No pending items to sync');
       return;
     }
     
-    console.log(`Starting sync of ${pendingItems.length} items`);
+    console.log(`Starting sync with ${pendingItems.length} pending items`);
+    
     this.state.isSyncing = true;
     this.state.lastSync = new Date().toISOString();
     this.notifyListeners();
-    this.saveToStorage();
     
     let syncSuccess = false;
     
     for (const item of pendingItems) {
-      if (!this.state.isOnline) {
-        console.log('Connection lost during sync, stopping');
-        break;
-      }
+      console.log(`Syncing item: ${item.id}`);
       
-      console.log(`Processing item ${item.id}: "${item.metadata.title}"`);
-      
-      // Update item status
-      item.status = 'in-progress';
-      item.lastAttempt = new Date().toISOString();
-      item.attemptCount++;
-      delete item.error;
+      item.status = 'syncing';
+      item.attemptCount += 1;
       this.notifyListeners();
       
       try {
-        console.log('Creating form data for upload');
+        // Prepare form data for upload
         const formData = new FormData();
-        formData.append('video', item.video, `${item.metadata.title}.mp4`);
-        formData.append('thumbnail', item.thumbnail, `${item.metadata.title}_thumb.jpg`);
-        formData.append('performanceId', item.performanceId);
+        formData.append('video', item.video, 'recording.mp4');
+        formData.append('thumbnail', item.thumbnail, 'thumbnail.jpg');
         formData.append('performanceTitle', item.performanceTitle);
-        formData.append('rehearsalId', item.rehearsalId);
-        formData.append('rehearsalTitle', item.metadata.rehearsalTitle || 'Untitled Rehearsal');
-        formData.append('recordingTitle', item.metadata.title);
-        formData.append('recordingMetadata', JSON.stringify(item.metadata));
+        formData.append('recordingTitle', item.metadata.title || 'Untitled Recording');
         
-        console.log('Sending upload request to server');
-        console.log('Upload details:', {
-          performanceId: item.performanceId,
-          performanceTitle: item.performanceTitle,
-          rehearsalId: item.rehearsalId,
-          rehearsalTitle: item.metadata.rehearsalTitle,
-          recordingTitle: item.metadata.title,
-          videoSize: `${Math.round(item.video.size / 1024 / 1024 * 100) / 100}MB`
-        });
-        
-        // Test the API endpoint before sending the full request
-        console.log('Testing API endpoint with a ping');
-        const pingRes = await fetch('/api/ping', {
-          method: 'GET',
-        });
-        
-        if (!pingRes.ok) {
-          console.error('API endpoint test failed:', pingRes.status, pingRes.statusText);
-          throw new Error(`API endpoint test failed: ${pingRes.status} ${pingRes.statusText}`);
+        if (item.metadata.rehearsalTitle) {
+          formData.append('rehearsalTitle', item.metadata.rehearsalTitle);
         }
         
-        console.log('API endpoint test succeeded, proceeding with upload');
+        console.log('Uploading recording to server');
         
-        const res = await fetch('/api/upload', {
+        // Upload to server
+        const response = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });
         
-        if (!res.ok) {
-          const errorText = await res.text();
-          console.error('Upload failed:', {
-            status: res.status,
-            statusText: res.statusText, 
-            error: errorText
-          });
-          throw new Error(`Upload failed: ${res.status} ${res.statusText} - ${errorText}`);
+        // Clone the response before reading it
+        const responseClone = response.clone();
+        
+        // Check response status
+        if (!response.ok) {
+          const errorData = await responseClone.text();
+          console.error('Upload failed with status:', response.status, errorData);
+          
+          // Special handling for auth errors
+          if (response.status === 401 || response.status === 403) {
+            throw new Error('Authentication error. Please reconnect your Google Drive in Settings.');
+          }
+          
+          throw new Error(`Upload failed with status ${response.status}: ${errorData}`);
         }
         
-        const result = await res.json();
+        // Parse successful response
+        const result = await response.json();
         console.log('Upload successful:', result);
-        
-        // Mark item as completed
         item.status = 'completed';
-        this.state.lastSuccess = new Date().toISOString();
         syncSuccess = true;
       } catch (error) {
         console.error('Sync error for item:', item.id, error);
@@ -323,20 +273,16 @@ class SyncService {
       this.saveToStorage();
     }
     
-    // Clean up completed items
-    this.state.queue = this.state.queue.filter(item => item.status !== 'completed');
-    
     this.state.isSyncing = false;
+    
+    if (syncSuccess) {
+      this.state.lastSuccess = new Date().toISOString();
+    }
+    
     this.notifyListeners();
     this.saveToStorage();
     
-    console.log('Sync completed', {
-      success: syncSuccess,
-      pendingCount: this.getPendingCount(),
-      failedCount: this.getFailedCount()
-    });
-    
-    return syncSuccess;
+    console.log('Sync completed');
   }
 
   public getPendingCount() {

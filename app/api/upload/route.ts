@@ -1,7 +1,12 @@
+// app/api/upload/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { getGoogleAuthClient } from '@/lib/googleAuth';
+import { auth } from '@clerk/nextjs/server';
+import { getUserGoogleAuthClient } from '@/lib/googleAuth';
 
+/**
+ * Ensure a folder exists in Google Drive, creating it if necessary
+ */
 async function ensureFolderExists(drive: any, name: string, parentId?: string): Promise<string> {
   console.log(`Ensuring folder exists: "${name}"${parentId ? ` in parent ${parentId}` : ''}`);
   
@@ -47,71 +52,46 @@ export async function POST(request: NextRequest) {
   console.log('Upload API called');
   
   try {
-    // Check for required environment variables
-    if (!process.env.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) {
-      console.error('Missing GOOGLE_SERVICE_ACCOUNT_CREDENTIALS environment variable');
+    // Get the current user
+    const { userId } = auth();
+    
+    if (!userId) {
       return NextResponse.json({ 
-        error: 'Google Drive API credentials not configured',
-        details: 'Server environment is missing required configuration'
-      }, { status: 500 });
+        error: 'Authentication required',
+        details: 'You must be logged in to upload files'
+      }, { status: 401 });
     }
     
     // Get form data
     const formData = await request.formData();
     
+    // Get files from form data
     const video = formData.get('video') as File;
     const thumbnail = formData.get('thumbnail') as File;
-    const performanceId = formData.get('performanceId') as string;
     const performanceTitle = formData.get('performanceTitle') as string;
-    const rehearsalId = formData.get('rehearsalId') as string;
-    const rehearsalTitle = formData.get('rehearsalTitle') as string;
+    const rehearsalTitle = formData.get('rehearsalTitle') as string || 'Default Rehearsal';
     const recordingTitle = formData.get('recordingTitle') as string;
     
-    console.log('Received upload request:', {
-      performanceId,
-      performanceTitle,
-      rehearsalId,
-      rehearsalTitle,
-      recordingTitle,
-      videoSize: video ? `${Math.round(video.size / 1024 / 1024 * 100) / 100}MB` : 'Not provided',
-      thumbnailSize: thumbnail ? `${Math.round(thumbnail.size / 1024)}KB` : 'Not provided',
-    });
-    
-    // Validate inputs
-    if (!video || !thumbnail || !performanceId || !rehearsalId) {
-      const missingFields = [];
-      if (!video) missingFields.push('video');
-      if (!thumbnail) missingFields.push('thumbnail');
-      if (!performanceId) missingFields.push('performanceId');
-      if (!rehearsalId) missingFields.push('rehearsalId');
-      
-      console.error('Missing required fields:', missingFields.join(', '));
-      return NextResponse.json({ 
-        error: 'Missing required fields', 
-        missingFields 
+    if (!video || !thumbnail || !performanceTitle || !recordingTitle) {
+      return NextResponse.json({
+        error: 'Missing required fields',
+        details: 'Video, thumbnail, performance title, and recording title are required'
       }, { status: 400 });
     }
     
-    // Initialize Google Drive API
-    console.log('Initializing Google Drive API');
-    const auth = await getGoogleAuthClient();
-    const drive = google.drive({ version: 'v3', auth });
+    console.log(`Uploading recording "${recordingTitle}" for performance "${performanceTitle}"`);
     
-    // Setup folder structure: App Root > Performance > Rehearsal
-    console.log('Setting up folder structure');
+    // Initialize Google Drive API with user credentials
+    console.log(`Initializing Google Drive API for user: ${userId}`);
+    const oauth2Client = await getUserGoogleAuthClient(userId);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
     
-    // 1. Ensure root "Sequence App" folder exists
-    const appFolderId = await ensureFolderExists(drive, 'Sequence App');
+    // Create folder structure - use "StageVault Recordings" as the root folder
+    const rootFolderId = await ensureFolderExists(drive, "StageVault Recordings");
+    const performanceFolderId = await ensureFolderExists(drive, performanceTitle, rootFolderId);
+    const rehearsalFolderId = await ensureFolderExists(drive, rehearsalTitle, performanceFolderId);
     
-    // 2. Ensure performance folder exists inside app folder
-    const performanceFolderName = `Performance - ${performanceTitle} (${performanceId})`;
-    const performanceFolderId = await ensureFolderExists(drive, performanceFolderName, appFolderId);
-    
-    // 3. Ensure rehearsal folder exists inside performance folder
-    const rehearsalFolderName = `Rehearsal - ${rehearsalTitle} (${rehearsalId})`;
-    const rehearsalFolderId = await ensureFolderExists(drive, rehearsalFolderName, performanceFolderId);
-    
-    // Upload video file
+    // Upload video
     console.log(`Uploading video: "${recordingTitle}.mp4"`);
     const videoArrayBuffer = await video.arrayBuffer();
     const videoBuffer = Buffer.from(videoArrayBuffer);
@@ -167,7 +147,7 @@ export async function POST(request: NextRequest) {
         },
       },
       folders: {
-        app: appFolderId,
+        root: rootFolderId,
         performance: performanceFolderId,
         rehearsal: rehearsalFolderId,
       }
@@ -185,6 +165,18 @@ export async function POST(request: NextRequest) {
         name: error.name,
         stack: error.stack,
       };
+      
+      // Check for Google API specific errors
+      if (
+        error.message.includes('invalid_grant') || 
+        error.message.includes('token has been expired or revoked')
+      ) {
+        return NextResponse.json({
+          error: 'Google Drive connection error',
+          details: 'Your Google Drive connection has expired. Please reconnect in Settings.',
+          code: 'GOOGLE_AUTH_ERROR'
+        }, { status: 401 });
+      }
     }
     
     return NextResponse.json({
@@ -192,4 +184,4 @@ export async function POST(request: NextRequest) {
       details: errorDetails,
     }, { status: 500 });
   }
-} 
+}
