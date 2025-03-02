@@ -1,6 +1,7 @@
 // lib/clerkAuth.ts
 import { clerkClient } from '@clerk/nextjs/server';
 import { randomBytes } from 'crypto';
+import { auth as getAuth } from '@clerk/nextjs';
 
 interface GoogleUserInfo {
   email: string;
@@ -14,6 +15,31 @@ interface ExternalAccount {
   provider: string;
   identificationId: string;
 }
+
+// A simple local storage manager for tokens
+const tokenStorage = {
+  setToken: (userId: string, token: string) => {
+    try {
+      if (typeof window !== 'undefined') {
+        // Store both in localStorage (for client-side)
+        localStorage.setItem(`google_token_${userId}`, token);
+      }
+    } catch (error) {
+      console.error('Error saving token to local storage:', error);
+    }
+  },
+  
+  getToken: (userId: string): string | null => {
+    try {
+      if (typeof window !== 'undefined') {
+        return localStorage.getItem(`google_token_${userId}`);
+      }
+    } catch (error) {
+      console.error('Error getting token from local storage:', error);
+    }
+    return null;
+  }
+};
 
 export async function createClerkUser(userInfo: GoogleUserInfo) {
   const { email, firstName, lastName, googleId, profileImageUrl } = userInfo;
@@ -100,28 +126,62 @@ export async function validateSession(sessionToken: string) {
   }
 }
 
-// Store Google tokens in user metadata
+// Updated saveGoogleToken to store in local storage too
 export async function saveGoogleToken(userId: string, refreshToken: string) {
   try {
-    await clerkClient.users.updateUser(userId, {
-      privateMetadata: {
-        googleRefreshToken: refreshToken,
-        googleTokenUpdatedAt: new Date().toISOString(),
-      },
-    });
+    // Store token in local storage (for client-side access)
+    tokenStorage.setToken(userId, refreshToken);
+    
+    // Also try to store in Clerk's private metadata if secret key is available
+    try {
+      await clerkClient.users.updateUser(userId, {
+        privateMetadata: {
+          googleRefreshToken: refreshToken,
+          googleTokenUpdatedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      // If this fails due to missing secret key, just log it - we have the local storage backup
+      console.warn('Could not update Clerk user metadata, continuing with local storage only:', error);
+    }
+    
     return true;
   } catch (error) {
     console.error('Error saving Google token:', error);
-    throw error;
+    return false;
   }
 }
 
-// Get token from user metadata
 export async function getGoogleRefreshToken(userId: string): Promise<string | null> {
   try {
-    const user = await clerkClient.users.getUser(userId);
-    const privateMetadata = user.privateMetadata as any;
-    return privateMetadata?.googleRefreshToken || null;
+    // First try to get from local storage - this doesn't require the Clerk secret key
+    const localToken = tokenStorage.getToken(userId);
+    if (localToken) {
+      console.log("Found refresh token in local storage");
+      return localToken;
+    }
+    
+    // If not in local storage, try to get from Clerk if possible
+    try {
+      const user = await clerkClient.users.getUser(userId);
+      
+      // Check for Google OAuth token in user's private metadata
+      const privateMetadata = user.privateMetadata as any;
+      const refreshToken = privateMetadata?.googleRefreshToken || 
+                          privateMetadata?.google_refresh_token;
+      
+      if (refreshToken) {
+        console.log("Found refresh token in user metadata");
+        // Cache it in local storage for next time
+        tokenStorage.setToken(userId, refreshToken);
+        return refreshToken;
+      }
+    } catch (clerkError) {
+      console.warn('Could not get user from Clerk API, continuing with local storage only:', clerkError);
+    }
+    
+    console.log("No Google refresh token found for user");
+    return null;
   } catch (error) {
     console.error('Error getting Google refresh token:', error);
     return null;

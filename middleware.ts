@@ -1,40 +1,33 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
-import { NextResponse } from 'next/server';
 
-// Create a matcher for public routes
+// Define public routes that don't require authentication
 const isPublicRoute = createRouteMatcher([
   '/',
-  '/signin(.*)',
-  '/signup(.*)',
-  '/verify(.*)',
-  '/api/ping',
-  '/api/auth/clerk-webhook',
-  '/_next/(.*)' // Allow Next.js assets
+  '/api/webhooks(.*)',
+  '/sign-in(.*)',
+  '/sign-up(.*)'
 ]);
 
 export default clerkMiddleware((auth, req) => {
-  // Allow public routes without authentication
-  if (isPublicRoute(req)) {
-    return NextResponse.next();
-  }
-
-  // Check if user is authenticated
-  if (!auth.userId) {
-    // If it's an API route, return 401 Unauthorized
-    if (req.nextUrl?.pathname?.startsWith('/api/')) {
-      return NextResponse.json(
-        { error: "Authentication required", details: "You must be logged in to access this endpoint" },
-        { status: 401 }
-      );
+  // Protect all routes except public ones
+  if (!isPublicRoute(req)) {
+    // Check if the user is not authenticated
+    // @ts-ignore - Clerk type definitions might be outdated
+    if (!auth.userId) {
+      // Use "/sign-in" instead of "/login" since that's Clerk's default path
+      const signInUrl = new URL('/sign-in', req.url);
+      return Response.redirect(signInUrl);
     }
-    // For non-API routes, redirect to sign in
-    return NextResponse.redirect(new URL('/signin', req.url));
   }
-
-  // User is authenticated, allow the request
-  return NextResponse.next();
+}, {
+  debug: process.env.NODE_ENV === 'development'
 });
 
+// Stop the middleware from running on static files
 export const config = {
-  matcher: ['/((?!.*\\..*|_next).*)', '/', '/(api|trpc)(.*)'],
+  matcher: [
+    // Skip Next.js internals and static files
+    '/((?!_next/static|_next/image|favicon.ico|public).*)',
+    '/(api|trpc)(.*)',
+  ],
 };

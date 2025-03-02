@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { videoStorage } from './videoStorage';
 import { Performance, Recording, Metadata } from '../types';
+import { getGoogleRefreshToken } from '@/lib/clerkAuth';
+import { checkGoogleDriveConnection } from '@/lib/googleDrive';
 
 export interface SyncQueueItem {
   id: string;
@@ -42,6 +44,9 @@ class SyncService {
     isOnline: true,
     isSyncing: false,
   };
+  
+  // Initialize syncErrors as an empty object
+  private syncErrors: Record<string, string> = {};
   private listeners: (() => void)[] = [];
   private syncInterval: NodeJS.Timeout | null = null;
   private initialized = false;
@@ -196,93 +201,160 @@ class SyncService {
   }
 
   public async sync() {
+    if (this.state.isOffline) {
+      console.log('Offline, skipping sync');
+      return;
+    }
+
     if (this.state.isSyncing) {
-      console.log('Sync already in progress, skipping');
+      console.log('Already syncing, skipping');
       return;
     }
-    
-    const pendingItems = this.state.queue.filter(item => item.status === 'pending');
-    if (pendingItems.length === 0) {
-      console.log('No pending items to sync');
-      return;
-    }
-    
-    console.log(`Starting sync with ${pendingItems.length} pending items`);
-    
+
     this.state.isSyncing = true;
-    this.state.lastSync = new Date().toISOString();
-    this.notifyListeners();
-    
-    let syncSuccess = false;
-    
-    for (const item of pendingItems) {
+    this.saveToStorage();
+
+    try {
+      // Check if there are items to sync
+      if (!this.state.queue || this.state.queue.length === 0) {
+        console.log('No items in sync queue');
+        this.state.isSyncing = false;
+        this.saveToStorage();
+        return;
+      }
+
+      // Get the first item in the queue
+      const item = this.state.queue[0];
+      
+      if (!item) {
+        console.log('Item at index 0 is undefined, cleaning queue');
+        // Remove undefined items
+        this.state.queue = this.state.queue.filter(Boolean);
+        this.saveToStorage();
+        this.state.isSyncing = false;
+        return;
+      }
+
       console.log(`Syncing item: ${item.id}`);
       
-      item.status = 'syncing';
-      item.attemptCount += 1;
-      this.notifyListeners();
-      
+      // Get the current user
+      let userId;
       try {
-        // Prepare form data for upload
-        const formData = new FormData();
-        formData.append('video', item.video, 'recording.mp4');
-        formData.append('thumbnail', item.thumbnail, 'thumbnail.jpg');
-        formData.append('performanceTitle', item.performanceTitle);
-        formData.append('recordingTitle', item.metadata.title || 'Untitled Recording');
-        
-        if (item.metadata.rehearsalTitle) {
-          formData.append('rehearsalTitle', item.metadata.rehearsalTitle);
+        const userResponse = await fetch('/api/auth/me');
+        if (!userResponse.ok) {
+          throw new Error(`Failed to get current user: ${userResponse.status} ${userResponse.statusText}`);
         }
         
-        console.log('Uploading recording to server');
+        const userData = await userResponse.json();
+        userId = userData.userId;
         
-        // Upload to server
+        if (!userId) {
+          throw new Error('No user ID found, user may not be authenticated');
+        }
+        
+        console.log(`Syncing with user ID: ${userId}`);
+      } catch (userError) {
+        console.error('User authentication error:', userError);
+        // Initialize syncErrors if it's undefined
+        if (!this.syncErrors) this.syncErrors = {};
+        this.syncErrors[item.id] = `Authentication error: ${userError instanceof Error ? userError.message : String(userError)}`;
+        this.state.isSyncing = false;
+        this.saveToStorage();
+        return;
+      }
+
+      // Upload the recording
+      try {
         const response = await fetch('/api/upload', {
           method: 'POST',
-          body: formData,
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            ...item,
+            userId: userId
+          })
         });
-        
-        // Clone the response before reading it
-        const responseClone = response.clone();
-        
-        // Check response status
+
         if (!response.ok) {
-          const errorData = await responseClone.text();
-          console.error('Upload failed with status:', response.status, errorData);
-          
-          // Special handling for auth errors
-          if (response.status === 401 || response.status === 403) {
-            throw new Error('Authentication error. Please reconnect your Google Drive in Settings.');
+          let errorMessage;
+          try {
+            const errorData = await response.json();
+            errorMessage = errorData.message || `Upload failed: ${response.status}`;
+          } catch (jsonError) {
+            // Try to get text if JSON parsing fails
+            try {
+              const errorText = await response.text();
+              // If response looks like HTML
+              if (errorText.includes('<!DOCTYPE') || errorText.includes('<html>')) {
+                errorMessage = `Server error: ${response.status} ${response.statusText}`;
+              } else {
+                errorMessage = errorText || `Upload failed: ${response.status}`;
+              }
+            } catch (textError) {
+              errorMessage = `Upload failed: ${response.status} ${response.statusText}`;
+            }
           }
           
-          throw new Error(`Upload failed with status ${response.status}: ${errorData}`);
+          throw new Error(errorMessage);
+        }
+
+        // Parse the response, handling potential HTML/text responses
+        let result;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          result = await response.json();
+        } else {
+          const text = await response.text();
+          console.warn('Received non-JSON response:', text.substring(0, 100) + '...');
+          if (text.includes('<!DOCTYPE') || text.includes('<html>')) {
+            throw new Error('Received HTML instead of JSON. Server may be returning an error page.');
+          }
+          // Try to parse it anyway
+          try {
+            result = JSON.parse(text);
+          } catch (e) {
+            throw new Error(`Invalid response format: ${text.substring(0, 100)}...`);
+          }
         }
         
-        // Parse successful response
-        const result = await response.json();
-        console.log('Upload successful:', result);
-        item.status = 'completed';
-        syncSuccess = true;
+        console.log('Upload result:', result);
+
+        // Remove the item from the queue
+        this.state.queue = this.state.queue.slice(1);
+        this.state.lastSuccess = new Date().toISOString();
+        this.saveToStorage();
+
+        // Continue syncing if there are more items
+        if (this.state.queue.length > 0) {
+          setTimeout(() => this.sync(), 1000); // Small delay before next sync
+        } else {
+          console.log('Sync complete');
+        }
       } catch (error) {
-        console.error('Sync error for item:', item.id, error);
-        item.status = 'failed';
-        item.error = error instanceof Error ? error.message : String(error);
+        console.error('Sync error:', error);
+        // Initialize syncErrors if it's undefined
+        if (!this.syncErrors) this.syncErrors = {};
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.syncErrors[item.id] = errorMessage;
+        
+        // Update item's attempt count and status
+        if (item) {
+          item.attemptCount = (item.attemptCount || 0) + 1;
+          item.lastAttempt = new Date().toISOString();
+          item.error = errorMessage;
+          item.status = 'failed';
+          this.saveToStorage();
+        }
       }
-      
-      this.notifyListeners();
+    } catch (error) {
+      console.error('Unexpected sync error:', error);
+    } finally {
+      this.state.lastSync = new Date().toISOString();
+      this.state.isSyncing = false;
       this.saveToStorage();
+      this.notifyListeners();
     }
-    
-    this.state.isSyncing = false;
-    
-    if (syncSuccess) {
-      this.state.lastSuccess = new Date().toISOString();
-    }
-    
-    this.notifyListeners();
-    this.saveToStorage();
-    
-    console.log('Sync completed');
   }
 
   public getPendingCount() {
@@ -361,6 +433,25 @@ class SyncService {
 
   private notifyListeners() {
     this.listeners.forEach(listener => listener());
+  }
+
+  private updateItemStatus(itemId: string, status: SyncQueueItem['status']) {
+    const item = this.state.queue.find(i => i.id === itemId);
+    if (item) {
+      item.status = status;
+      this.notifyListeners();
+      this.saveToStorage();
+    }
+  }
+
+  private updateItemFailure(itemId: string, error: string) {
+    this.updateItemStatus(itemId, 'failed');
+    const item = this.state.queue.find(i => i.id === itemId);
+    if (item) {
+      item.error = error;
+      this.notifyListeners();
+      this.saveToStorage();
+    }
   }
 }
 

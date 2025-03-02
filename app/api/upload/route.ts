@@ -1,8 +1,9 @@
 // app/api/upload/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { google } from 'googleapis';
-import { auth } from '@clerk/nextjs/server';
+import { auth } from '@clerk/nextjs';
 import { getUserGoogleAuthClient } from '@/lib/googleAuth';
+import { getGoogleRefreshToken, uploadToGoogleDrive } from '@/lib/clerkAuth';
 
 /**
  * Ensure a folder exists in Google Drive, creating it if necessary
@@ -48,7 +49,7 @@ async function ensureFolderExists(drive: any, name: string, parentId?: string): 
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(request: Request) {
   console.log('Upload API called');
   
   try {
@@ -56,132 +57,90 @@ export async function POST(request: NextRequest) {
     const { userId } = auth();
     
     if (!userId) {
-      return NextResponse.json({ 
-        error: 'Authentication required',
-        details: 'You must be logged in to upload files'
-      }, { status: 401 });
+      console.log('No authenticated user found');
+      return NextResponse.json(
+        { success: false, message: 'Not authenticated' },
+        { status: 401 }
+      );
     }
     
-    // Get form data
-    const formData = await request.formData();
+    // Get request body
+    const requestData = await request.json();
+    console.log(`Upload request for recording: ${requestData.id}`);
     
-    // Get files from form data
-    const video = formData.get('video') as File;
-    const thumbnail = formData.get('thumbnail') as File;
-    const performanceTitle = formData.get('performanceTitle') as string;
-    const rehearsalTitle = formData.get('rehearsalTitle') as string || 'Default Rehearsal';
-    const recordingTitle = formData.get('recordingTitle') as string;
+    if (!requestData.id || !requestData.video || !requestData.metadata) {
+      return NextResponse.json(
+        { success: false, message: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
     
-    if (!video || !thumbnail || !performanceTitle || !recordingTitle) {
+    // Extract recording data
+    const { 
+      id, 
+      video, 
+      thumbnail, 
+      metadata, 
+      performanceId, 
+      performanceTitle, 
+      rehearsalId 
+    } = requestData;
+    
+    // Get Google refresh token from Clerk
+    const refreshToken = await getGoogleRefreshToken(userId);
+    
+    if (!refreshToken) {
+      console.log('No Google refresh token found');
       return NextResponse.json({
-        error: 'Missing required fields',
-        details: 'Video, thumbnail, performance title, and recording title are required'
-      }, { status: 400 });
+        success: false,
+        message: 'Google Drive not connected. Please connect in settings.'
+      });
     }
     
-    console.log(`Uploading recording "${recordingTitle}" for performance "${performanceTitle}"`);
-    
-    // Initialize Google Drive API with user credentials
-    console.log(`Initializing Google Drive API for user: ${userId}`);
-    const oauth2Client = await getUserGoogleAuthClient(userId);
-    const drive = google.drive({ version: 'v3', auth: oauth2Client });
-    
-    // Create folder structure - use "StageVault Recordings" as the root folder
-    const rootFolderId = await ensureFolderExists(drive, "StageVault Recordings");
-    const performanceFolderId = await ensureFolderExists(drive, performanceTitle, rootFolderId);
-    const rehearsalFolderId = await ensureFolderExists(drive, rehearsalTitle, performanceFolderId);
-    
-    // Upload video
-    console.log(`Uploading video: "${recordingTitle}.mp4"`);
-    const videoArrayBuffer = await video.arrayBuffer();
-    const videoBuffer = Buffer.from(videoArrayBuffer);
-    
-    const videoResponse = await drive.files.create({
-      requestBody: {
-        name: `${recordingTitle}.mp4`,
-        mimeType: 'video/mp4',
-        parents: [rehearsalFolderId],
-      },
-      media: {
-        mimeType: 'video/mp4',
-        body: videoBuffer,
-      },
-      fields: 'id,name,webViewLink',
-    });
-    
-    console.log(`Video uploaded with ID: ${videoResponse.data.id}`);
-    
-    // Upload thumbnail
-    console.log(`Uploading thumbnail: "${recordingTitle}_thumb.jpg"`);
-    const thumbnailArrayBuffer = await thumbnail.arrayBuffer();
-    const thumbnailBuffer = Buffer.from(thumbnailArrayBuffer);
-    
-    const thumbnailResponse = await drive.files.create({
-      requestBody: {
-        name: `${recordingTitle}_thumb.jpg`,
-        mimeType: 'image/jpeg',
-        parents: [rehearsalFolderId],
-      },
-      media: {
-        mimeType: 'image/jpeg',
-        body: thumbnailBuffer,
-      },
-      fields: 'id,name,webViewLink',
-    });
-    
-    console.log(`Thumbnail uploaded with ID: ${thumbnailResponse.data.id}`);
-    
-    // Return success response with file links
-    return NextResponse.json({
-      success: true,
-      files: {
-        video: {
-          id: videoResponse.data.id,
-          name: videoResponse.data.name,
-          webViewLink: videoResponse.data.webViewLink,
-        },
-        thumbnail: {
-          id: thumbnailResponse.data.id,
-          name: thumbnailResponse.data.name,
-          webViewLink: thumbnailResponse.data.webViewLink,
-        },
-      },
-      folders: {
-        root: rootFolderId,
-        performance: performanceFolderId,
-        rehearsal: rehearsalFolderId,
-      }
-    });
-  } catch (error) {
-    console.error('Upload API error:', error);
-    
-    // Extract and format error details
-    let errorMessage = 'Unknown error';
-    let errorDetails = {};
-    
-    if (error instanceof Error) {
-      errorMessage = error.message;
-      errorDetails = {
-        name: error.name,
-        stack: error.stack,
-      };
+    // Upload to Google Drive
+    try {
+      console.log('Uploading to Google Drive...');
+      const result = await uploadToGoogleDrive(
+        refreshToken,
+        video,
+        thumbnail,
+        {
+          ...metadata,
+          performanceId,
+          performanceTitle,
+          rehearsalId
+        }
+      );
       
-      // Check for Google API specific errors
-      if (
-        error.message.includes('invalid_grant') || 
-        error.message.includes('token has been expired or revoked')
-      ) {
-        return NextResponse.json({
-          error: 'Google Drive connection error',
-          details: 'Your Google Drive connection has expired. Please reconnect in Settings.',
-          code: 'GOOGLE_AUTH_ERROR'
-        }, { status: 401 });
-      }
+      console.log('Upload successful:', result);
+      return NextResponse.json({
+        success: true,
+        message: 'Recording uploaded to Google Drive',
+        fileId: result.fileId,
+        fileName: result.fileName,
+        thumbnailId: result.thumbnailId
+      });
+    } catch (uploadError) {
+      console.error('Error uploading to Google Drive:', uploadError);
+      const errorMessage = uploadError instanceof Error ? uploadError.message : String(uploadError);
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: `Google Drive upload failed: ${errorMessage}` 
+        },
+        { status: 500 }
+      );
     }
-    
-    return NextResponse.json({
-      error: errorMessage,
-      details: errorDetails,
-    }, { status: 500 });
+  } catch (error) {
+    console.error('Unexpected error in upload API:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      { 
+        success: false, 
+        message: `Server error: ${errorMessage}`,
+        error: error instanceof Error ? error.stack : undefined
+      },
+      { status: 500 }
+    );
   }
 }

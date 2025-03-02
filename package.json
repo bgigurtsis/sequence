@@ -8,7 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@clerk/nextjs": "latest",
+    "@clerk/nextjs": "^5.0.0-beta.46",
     "@radix-ui/react-dialog": "^1.0.0",
     "firebase-admin": "^13.1.0",
     "formidable": "^3.5.2",

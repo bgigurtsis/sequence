@@ -117,7 +117,7 @@ export const SyncStatusAdvanced = () => {
     }));
     
     try {
-      const response = await fetch('/api/ping');
+      const response = await fetch('/sign-in');
       const data = await response.json();
       
       if (response.ok) {
