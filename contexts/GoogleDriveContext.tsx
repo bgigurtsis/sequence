@@ -67,35 +67,21 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         return;
       }
       
-      if (!response.ok) {
-        let errorText;
-        try {
-          // Try to parse as JSON first
-          const errorData = await response.json();
-          errorText = errorData.message || `Error: ${response.status} ${response.statusText}`;
-        } catch (e) {
-          // If JSON parsing fails, get text
-          try {
-            errorText = await response.text();
-            // If text is HTML (likely an error page), provide generic message
-            if (errorText.includes('<!DOCTYPE')) {
-              errorText = `Server error: ${response.status} ${response.statusText}`;
-            }
-          } catch (textError) {
-            errorText = `Error: ${response.status} ${response.statusText}`;
-          }
-        }
-        
-        console.error('Connection failed:', errorText);
+      // Get the response text first to check if it's HTML
+      const responseText = await response.text();
+      
+      // Check if response is HTML before trying to parse as JSON
+      if (responseText.includes('<!DOCTYPE') || responseText.includes('<html>')) {
+        console.error('Received HTML instead of JSON from google-status endpoint');
         setIsConnected(false);
-        setError(`Connection failed: ${errorText}`);
+        setError(`Server error: Received HTML instead of JSON. Status: ${response.status}`);
         setIsLoading(false);
         return;
       }
       
-      // Handle successful response
+      // Now try to parse the text as JSON
       try {
-        const data = await response.json();
+        const data = JSON.parse(responseText);
         console.log('Google Drive status data:', data);
         
         if (data.connected) {
