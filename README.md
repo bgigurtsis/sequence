@@ -1,73 +1,75 @@
-# Sequence App
+# StageVault - Firebase Migration
 
-A video recording and management application for performances and rehearsals, with Google Drive integration for cloud storage.
+This repository contains the migrated version of StageVault, now using Firebase for authentication, storage, and database functionality.
 
-## Getting Started
+## Migration Overview
 
-### Installation
+The application has been migrated from Clerk to Firebase Authentication, with the following key changes:
 
-1. Clone the repository
+1. **Authentication**: Replaced Clerk with Firebase Authentication
+2. **Database**: Using Firestore for data storage
+3. **Storage**: Using Firebase Storage and Google Drive integration
+4. **Functions**: Using Firebase Functions for server-side operations
+
+## Setup Instructions
+
+1. Clone this repository
 2. Install dependencies:
+   ```
+   npm install
+   ```
+3. Create a Firebase project at [https://console.firebase.google.com/](https://console.firebase.google.com/)
+4. Enable the following services:
+   - Authentication (with Google provider)
+   - Firestore Database
+   - Storage
+   - Functions
+5. Update the `.env.local` file with your Firebase configuration:
+   ```
+   NEXT_PUBLIC_FIREBASE_API_KEY=your-api-key
+   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-project-id.firebaseapp.com
+   NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project-id
+   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
+   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your-messaging-sender-id
+   NEXT_PUBLIC_FIREBASE_APP_ID=your-app-id
+   ```
+6. Deploy Firebase Functions:
+   ```
+   cd functions
+   npm install
+   firebase deploy --only functions
+   ```
+7. Run the development server:
+   ```
+   npm run dev
+   ```
 
-```bash
-npm install
-```
+## Key Features
 
-3. Create a `.env.local` file based on the `.env.example` file
+- **User Authentication**: Sign in with Google
+- **Performance Management**: Create, view, edit, and delete performances
+- **Recording Management**: Record videos directly in the browser or upload existing videos
+- **Google Drive Integration**: Store recordings in Google Drive for better management
 
-### Google Drive Integration Setup
+## Project Structure
 
-To enable Google Drive synchronization:
+- `/app`: Next.js app router pages
+- `/components`: Reusable UI components
+- `/contexts`: React context providers
+- `/hooks`: Custom React hooks
+- `/lib`: Utility functions and configuration
+- `/functions`: Firebase Cloud Functions
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the Google Drive API
-4. Create a service account with the following roles:
-   - Drive Admin (roles/drive.admin)
-5. Create a key for the service account (JSON format)
-6. Copy the contents of the JSON file and paste it in the `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` variable in your `.env.local` file
-7. Share the Google Drive folder you want to use with the service account email address
+## Google Drive Integration
 
-### Development
+To enable Google Drive integration:
 
-Run the development server:
+1. Create OAuth credentials in the Google Cloud Console
+2. Configure the Firebase Functions with the necessary environment variables
+3. Users can connect their Google Drive account from the Settings page
 
-```bash
-npm run dev
-```
+## Migration Notes
 
-### Troubleshooting Google Drive Integration
-
-If you're experiencing issues with Google Drive synchronization:
-
-1. Check if the Google Drive API is enabled in your Google Cloud Console
-2. Verify that your service account has the correct permissions
-3. Ensure your service account credentials are correctly formatted in the `.env.local` file
-4. Look for error messages in the browser console and server logs
-5. Use the "Test API Connection" button in the Sync Status panel to diagnose connection issues
-
-### File Structure
-
-- `/app` - Next.js App Router pages and API routes
-- `/components` - React components
-- `/contexts` - React context providers
-- `/lib` - Utility functions and helpers
-- `/services` - Client-side services like sync and storage
-- `/types` - TypeScript type definitions
-
-### API Routes
-
-- `/api/ping` - Tests Google Drive API connectivity
-- `/api/upload` - Uploads videos to Google Drive
-- `/api/delete` - Deletes videos from Google Drive
-
-## Features
-
-- Record videos directly in the browser
-- Upload existing video files
-- Add external video links
-- Organize videos by performances and rehearsals
-- Add metadata to recordings
-- Synchronize recordings with Google Drive
-- Offline-first approach - work even without internet
-- Background synchronization when online
+- User data will need to be migrated from the previous system to Firebase
+- Existing recordings will need to be transferred to Firebase Storage or Google Drive
+- The database schema has been updated to work with Firestore
