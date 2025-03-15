@@ -14,19 +14,28 @@ const getOAuth2Client = () => {
   );
 };
 
+// Define the type for request data for better type checking
+interface CallableRequest<T> {
+  data: T;
+  auth?: {
+    uid: string;
+    token: any;
+  } | null;
+}
+
 /**
  * Gets a user's Google access token using their refresh token stored in Firestore
  */
-export const getGoogleAccessToken = functions.https.onCall(async (data, context) => {
+export const getGoogleAccessToken = functions.https.onCall(async (request) => {
   // Check if user is authenticated
-  if (!context.auth) {
+  if (!request.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
       'User must be authenticated to get a token'
     );
   }
 
-  const userId = context.auth.uid;
+  const userId = request.auth.uid;
   
   try {
     // Get user document from Firestore
@@ -71,20 +80,27 @@ export const getGoogleAccessToken = functions.https.onCall(async (data, context)
   }
 });
 
+interface FolderCreationData {
+  folderName: string;
+  parentFolderId?: string;
+  metadata?: Record<string, any>;
+}
+
 /**
  * Creates a folder in the user's Google Drive
  */
-export const createGoogleDriveFolder = functions.https.onCall(async (data, context) => {
+export const createGoogleDriveFolder = functions.https.onCall(async (request) => {
   // Check if user is authenticated
-  if (!context.auth) {
+  if (!request.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
       'User must be authenticated to create folders'
     );
   }
   
+  const data = request.data as FolderCreationData;
   const { folderName, parentFolderId, metadata = {} } = data;
-  const userId = context.auth.uid;
+  const userId = request.auth.uid;
   
   if (!folderName) {
     throw new functions.https.HttpsError(
@@ -138,9 +154,9 @@ export const createGoogleDriveFolder = functions.https.onCall(async (data, conte
     });
     
     return {
-      id: response.data.id,
-      name: response.data.name,
-      webViewLink: response.data.webViewLink
+      id: response.data.id ?? '',
+      name: response.data.name ?? '',
+      webViewLink: response.data.webViewLink ?? ''
     };
   } catch (error) {
     console.error('Error creating folder:', error);
@@ -151,20 +167,29 @@ export const createGoogleDriveFolder = functions.https.onCall(async (data, conte
   }
 });
 
+interface FileUploadData {
+  fileData: string;
+  fileName: string;
+  mimeType: string;
+  folderId?: string;
+  metadata?: Record<string, any>;
+}
+
 /**
  * Upload a file to Google Drive
  */
-export const uploadToGoogleDrive = functions.https.onCall(async (data, context) => {
+export const uploadToGoogleDrive = functions.https.onCall(async (request) => {
   // Check if user is authenticated
-  if (!context.auth) {
+  if (!request.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
       'User must be authenticated to upload files'
     );
   }
   
+  const data = request.data as FileUploadData;
   const { fileData, fileName, mimeType, folderId, metadata = {} } = data;
-  const userId = context.auth.uid;
+  const userId = request.auth.uid;
   
   if (!fileData || !fileName || !mimeType) {
     throw new functions.https.HttpsError(
@@ -207,7 +232,8 @@ export const uploadToGoogleDrive = functions.https.onCall(async (data, context) 
       });
       
       if (folderQuery.data.files && folderQuery.data.files.length > 0) {
-        parentFolderId = folderQuery.data.files[0].id;
+        // Add null check to handle potential null value
+        parentFolderId = folderQuery.data.files[0].id ?? '';
       } else {
         // Create app folder
         const folderResponse = await drive.files.create({
@@ -220,7 +246,7 @@ export const uploadToGoogleDrive = functions.https.onCall(async (data, context) 
           },
           fields: 'id'
         });
-        parentFolderId = folderResponse.data.id;
+        parentFolderId = folderResponse.data.id ?? '';
       }
     }
     
@@ -252,21 +278,23 @@ export const uploadToGoogleDrive = functions.https.onCall(async (data, context) 
     });
     
     // Make file readable without authentication
-    await drive.permissions.create({
-      fileId: response.data.id as string,
-      requestBody: {
-        role: 'reader',
-        type: 'anyone'
-      }
-    });
+    if (response.data.id) {
+      await drive.permissions.create({
+        fileId: response.data.id,
+        requestBody: {
+          role: 'reader',
+          type: 'anyone'
+        }
+      });
+    }
     
     return {
-      id: response.data.id,
-      name: response.data.name,
-      mimeType: response.data.mimeType,
-      webViewLink: response.data.webViewLink,
-      webContentLink: response.data.webContentLink,
-      thumbnailLink: response.data.thumbnailLink
+      id: response.data.id ?? '',
+      name: response.data.name ?? '',
+      mimeType: response.data.mimeType ?? '',
+      webViewLink: response.data.webViewLink ?? '',
+      webContentLink: response.data.webContentLink ?? '',
+      thumbnailLink: response.data.thumbnailLink ?? ''
     };
   } catch (error) {
     console.error('Error uploading file:', error);
@@ -277,20 +305,25 @@ export const uploadToGoogleDrive = functions.https.onCall(async (data, context) 
   }
 });
 
+interface FileDeleteData {
+  fileId: string;
+}
+
 /**
  * Delete a file from Google Drive
  */
-export const deleteFromGoogleDrive = functions.https.onCall(async (data, context) => {
+export const deleteFromGoogleDrive = functions.https.onCall(async (request) => {
   // Check if user is authenticated
-  if (!context.auth) {
+  if (!request.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
       'User must be authenticated to delete files'
     );
   }
   
+  const data = request.data as FileDeleteData;
   const { fileId } = data;
-  const userId = context.auth.uid;
+  const userId = request.auth.uid;
   
   if (!fileId) {
     throw new functions.https.HttpsError(
