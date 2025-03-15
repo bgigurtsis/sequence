@@ -1,33 +1,67 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { appInitialize, getAdminAuth } from '@/lib/firebase-admin';
 
-// Define public routes that don't require authentication
-const isPublicRoute = createRouteMatcher([
-  '/',
-  '/api/webhooks(.*)',
-  '/sign-in(.*)',
-  '/sign-up(.*)'
-]);
+// Initialize Firebase Admin
+appInitialize();
 
-export default clerkMiddleware((auth, req) => {
-  // Protect all routes except public ones
-  if (!isPublicRoute(req)) {
-    // Check if the user is not authenticated
-    // @ts-ignore - Clerk type definitions might be outdated
-    if (!auth.userId) {
-      // Use "/sign-in" instead of "/login" since that's Clerk's default path
-      const signInUrl = new URL('/sign-in', req.url);
-      return Response.redirect(signInUrl);
-    }
+// Define public routes
+const PUBLIC_ROUTES = ['/', '/signin', '/api/auth/session'];
+
+export async function verifyAuthCookie(cookieString: string): Promise<{valid: boolean, uid?: string}> {
+  try {
+    // Verify the session cookie
+    const decodedClaims = await getAdminAuth().verifySessionCookie(cookieString, true);
+    return { valid: true, uid: decodedClaims.uid };
+  } catch (error) {
+    console.error('Invalid session cookie:', error);
+    return { valid: false };
   }
-}, {
-  debug: process.env.NODE_ENV === 'development'
-});
+}
 
-// Stop the middleware from running on static files
+export async function middleware(request: NextRequest) {
+  // Skip for public routes
+  if (PUBLIC_ROUTES.some(route => request.nextUrl.pathname.startsWith(route))) {
+    return NextResponse.next();
+  }
+  
+  // Get session cookie
+  const sessionCookie = request.cookies.get('session')?.value;
+  
+  if (!sessionCookie) {
+    return NextResponse.redirect(new URL('/signin', request.url));
+  }
+  
+  try {
+    // Verify the session cookie
+    const { valid, uid } = await verifyAuthCookie(sessionCookie);
+    
+    if (!valid) {
+      return NextResponse.redirect(new URL('/signin', request.url));
+    }
+    
+    // Add user ID to headers for API routes
+    if (request.nextUrl.pathname.startsWith('/api/')) {
+      const requestHeaders = new Headers(request.headers);
+      requestHeaders.set('x-user-id', uid || '');
+      
+      return NextResponse.next({
+        request: {
+          headers: requestHeaders,
+        },
+      });
+    }
+    
+    return NextResponse.next();
+  } catch (error) {
+    // Invalid session, redirect to login
+    return NextResponse.redirect(new URL('/signin', request.url));
+  }
+}
+
 export const config = {
   matcher: [
-    // Skip Next.js internals and static files
     '/((?!_next/static|_next/image|favicon.ico|public).*)',
-    '/(api|trpc)(.*)',
+    '/api/(?!auth/session).*',
   ],
 };

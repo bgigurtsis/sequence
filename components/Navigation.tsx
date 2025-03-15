@@ -7,6 +7,17 @@ import { LogOut } from 'lucide-react';
 export default function Navigation() {
   const { user, loading, logout, isGoogleDriveConnected } = useAuth();
 
+  const handleLogout = async () => {
+    try {
+      // First call the logout API to clear cookies
+      await fetch('/api/auth/logout', { method: 'POST' });
+      // Then sign out from Firebase
+      await logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
   return (
     <nav className="bg-blue-600 text-white p-4">
       <div className="container mx-auto flex justify-between items-center">
@@ -46,7 +57,7 @@ export default function Navigation() {
               </div>
               
               <button 
-                onClick={logout}
+                onClick={handleLogout}
                 className="flex items-center text-sm hover:underline"
               >
                 <LogOut className="h-4 w-4 mr-1" />

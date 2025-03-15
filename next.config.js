@@ -1,17 +1,29 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  experimental: {
-    serverComponentsExternalPackages: ['@clerk/clerk-sdk-node'],
-  },
+  output: 'export',
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'https',
-        hostname: 'img.clerk.com',
+        hostname: 'firebasestorage.googleapis.com',
       },
+      {
+        protocol: 'https',
+        hostname: 'lh3.googleusercontent.com',
+      }
     ],
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL ? 
+          `${process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL}/:path*` : '/:path*',
+      }
+    ];
+  }
 };
 
 module.exports = nextConfig;

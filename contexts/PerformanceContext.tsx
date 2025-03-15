@@ -18,6 +18,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from './AuthContext';
+import { useGoogleDriveUpload } from '@/hooks/useGoogleDriveUpload';
 
 export type Performance = {
   id: string;
@@ -30,6 +31,9 @@ export type Performance = {
   tags?: string[];
   createdAt: Timestamp;
   userId: string;
+  updatedAt: Timestamp;
+  googleDriveFolderId?: string;
+  googleDriveFolderLink?: string;
 };
 
 export type Rehearsal = {
@@ -42,6 +46,9 @@ export type Rehearsal = {
   notes?: string;
   createdAt: Timestamp;
   userId: string;
+  updatedAt: Timestamp;
+  googleDriveFolderId?: string;
+  googleDriveFolderLink?: string;
 };
 
 export type Recording = {
@@ -58,6 +65,11 @@ export type Recording = {
   sourceType: 'recorded' | 'uploaded';
   createdAt: Timestamp;
   userId: string;
+  updatedAt: Timestamp;
+  googleDriveVideoId?: string;
+  googleDriveVideoLink?: string;
+  googleDriveThumbnailId?: string;
+  googleDriveThumbnailLink?: string;
 };
 
 export type PerformanceContextType = {
@@ -68,10 +80,10 @@ export type PerformanceContextType = {
   selectedRehearsal: Rehearsal | null;
   loading: boolean;
   error: string | null;
-  createPerformance: (performance: Omit<Performance, 'id' | 'createdAt' | 'userId'>) => Promise<string>;
+  createPerformance: (performance: Omit<Performance, 'id' | 'createdAt' | 'userId' | 'updatedAt' | 'googleDriveFolderId' | 'googleDriveFolderLink'>) => Promise<string>;
   updatePerformance: (id: string, data: Partial<Performance>) => Promise<void>;
   deletePerformance: (id: string) => Promise<void>;
-  createRehearsal: (rehearsal: Omit<Rehearsal, 'id' | 'createdAt' | 'userId'>) => Promise<string>;
+  createRehearsal: (rehearsal: Omit<Rehearsal, 'id' | 'createdAt' | 'userId' | 'updatedAt' | 'googleDriveFolderId' | 'googleDriveFolderLink'>) => Promise<string>;
   updateRehearsal: (id: string, data: Partial<Rehearsal>) => Promise<void>;
   deleteRehearsal: (id: string) => Promise<void>;
   selectPerformance: (performance: Performance | null) => void;
@@ -102,6 +114,10 @@ export const PerformanceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [error, setError] = useState<string | null>(null);
   const [isPerformanceModalOpen, setIsPerformanceModalOpen] = useState<boolean>(false);
   const [isRehearsalModalOpen, setIsRehearsalModalOpen] = useState<boolean>(false);
+  const { 
+    createPerformanceFolder, 
+    createRehearsalFolder 
+  } = useGoogleDriveUpload();
 
   // Load performances for the current user
   useEffect(() => {
@@ -186,16 +202,58 @@ export const PerformanceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [user, performances]);
 
   // Create a new performance
-  const createPerformance = async (performanceData: Omit<Performance, 'id' | 'createdAt' | 'userId'>): Promise<string> => {
+  const createPerformance = async (performanceData: Omit<Performance, 'id' | 'createdAt' | 'userId' | 'updatedAt' | 'googleDriveFolderId' | 'googleDriveFolderLink'>): Promise<string> => {
     if (!user) throw new Error('User must be authenticated to create a performance');
 
     try {
       const docRef = await addDoc(collection(db, 'performances'), {
         ...performanceData,
         userId: user.uid,
-        createdAt: Timestamp.now(),
+        createdAt: Timestamp.fromDate(new Date()),
+        updatedAt: Timestamp.fromDate(new Date()),
       });
 
+      // Create folder in Google Drive
+      try {
+        const folder = await createPerformanceFolder(
+          performanceData.title,
+          docRef.id
+        );
+        
+        // Update performance with Google Drive folder info
+        await updateDoc(doc(db, 'performances', docRef.id), {
+          googleDriveFolderId: folder.id,
+          googleDriveFolderLink: folder.webViewLink
+        });
+        
+        // Add Google Drive info to the local state
+        const updatedPerformanceData = {
+          ...performanceData,
+          id: docRef.id,
+          googleDriveFolderId: folder.id,
+          googleDriveFolderLink: folder.webViewLink
+        };
+        
+        setPerformances(prevPerformances => [
+          ...prevPerformances,
+          updatedPerformanceData as Performance
+        ]);
+      } catch (error) {
+        console.error('Error creating Google Drive folder:', error);
+        // Still add performance to state even if Drive folder creation fails
+        const updatedPerformanceData = {
+          ...performanceData,
+          id: docRef.id,
+          googleDriveFolderId: undefined,
+          googleDriveFolderLink: undefined
+        };
+        
+        setPerformances(prevPerformances => [
+          ...prevPerformances,
+          updatedPerformanceData as Performance
+        ]);
+      }
+      
       return docRef.id;
     } catch (err) {
       console.error('Error creating performance:', err);
@@ -240,21 +298,103 @@ export const PerformanceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   // Create a new rehearsal
-  const createRehearsal = async (rehearsalData: Omit<Rehearsal, 'id' | 'createdAt' | 'userId'>): Promise<string> => {
+  const createRehearsal = async (rehearsalData: Omit<Rehearsal, 'id' | 'createdAt' | 'userId' | 'updatedAt' | 'googleDriveFolderId' | 'googleDriveFolderLink'>): Promise<string> => {
     if (!user) throw new Error('User must be authenticated to create a rehearsal');
 
     try {
-      const docRef = await addDoc(collection(db, 'rehearsals'), {
-        ...rehearsalData,
-        userId: user.uid,
-        createdAt: Timestamp.now(),
-      });
-
+      // Get the performance to get the Google Drive folder ID
+      const performanceDoc = await getDoc(doc(db, 'performances', rehearsalData.performanceId));
+      
+      if (!performanceDoc.exists()) {
+        throw new Error('Performance not found');
+      }
+      
+      const performance = performanceDoc.data() as Performance;
+      
+      // Check if user owns this performance
+      if (performance.userId !== user.uid) {
+        throw new Error('Not authorized to add rehearsals to this performance');
+      }
+      
+      const docRef = await addDoc(
+        collection(db, 'performances', rehearsalData.performanceId, 'rehearsals'), 
+        {
+          ...rehearsalData,
+          createdAt: Timestamp.fromDate(new Date()),
+          updatedAt: Timestamp.fromDate(new Date())
+        }
+      );
+      
+      // Create folder in Google Drive if we have a parent folder ID
+      if (performance.googleDriveFolderId) {
+        try {
+          const folder = await createRehearsalFolder(
+            rehearsalData.title,
+            performance.googleDriveFolderId,
+            docRef.id,
+            rehearsalData.performanceId
+          );
+          
+          // Update rehearsal with Google Drive folder info
+          await updateDoc(doc(db, 'performances', rehearsalData.performanceId, 'rehearsals', docRef.id), {
+            googleDriveFolderId: folder.id,
+            googleDriveFolderLink: folder.webViewLink
+          });
+          
+          // Add Google Drive info to the local state
+          const updatedRehearsalData = {
+            ...rehearsalData,
+            id: docRef.id,
+            googleDriveFolderId: folder.id,
+            googleDriveFolderLink: folder.webViewLink
+          };
+          
+          setRehearsals(prevRehearsals => ({
+            ...prevRehearsals,
+            [rehearsalData.performanceId]: [
+              ...prevRehearsals[rehearsalData.performanceId],
+              updatedRehearsalData as Rehearsal
+            ]
+          }));
+        } catch (error) {
+          console.error('Error creating Google Drive folder:', error);
+          // Still add rehearsal to state even if Drive folder creation fails
+          const updatedRehearsalData = {
+            ...rehearsalData,
+            id: docRef.id,
+            googleDriveFolderId: undefined,
+            googleDriveFolderLink: undefined
+          };
+          
+          setRehearsals(prevRehearsals => ({
+            ...prevRehearsals,
+            [rehearsalData.performanceId]: [
+              ...prevRehearsals[rehearsalData.performanceId],
+              updatedRehearsalData as Rehearsal
+            ]
+          }));
+        }
+      } else {
+        // No Google Drive folder, just add to state
+        const updatedRehearsalData = {
+          ...rehearsalData,
+          id: docRef.id
+        };
+        
+        setRehearsals(prevRehearsals => ({
+          ...prevRehearsals,
+          [rehearsalData.performanceId]: [
+            ...prevRehearsals[rehearsalData.performanceId],
+            updatedRehearsalData as Rehearsal
+          ]
+        }));
+      }
+      
       return docRef.id;
-    } catch (err) {
-      console.error('Error creating rehearsal:', err);
+    } catch (error) {
+      console.error('Error creating rehearsal:', error);
       setError('Failed to create rehearsal');
-      throw err;
+      throw error;
     }
   };
 

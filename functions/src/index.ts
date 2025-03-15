@@ -1,393 +1,338 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import { google, drive_v3 } from 'googleapis';
+import { google } from 'googleapis';
 
+// Initialize Firebase Admin
 admin.initializeApp();
 
-// Import specific types for better TypeScript integration
-type HttpsCallableContext = functions.https.CallableContext;
+// Get the OAuth2 client
+const getOAuth2Client = () => {
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+  );
+};
 
-// Types for Google Drive functions
-interface UploadToGoogleDriveData {
-  fileData: string;
-  fileName: string;
-  mimeType?: string;
-  metadata?: {
-    title?: string;
-    description?: string;
-    performanceId?: string;
-    rehearsalId?: string;
-    type?: string;
-  };
-}
-
-interface DeleteFromGoogleDriveData {
-  type: 'performance' | 'rehearsal' | 'recording';
-  performanceId?: string;
-  performanceTitle?: string;
-  rehearsalId?: string;
-  rehearsalTitle?: string;
-  recordingId?: string;
-  recordingTitle?: string;
-}
-
-// Get user's Google access token
-async function getGoogleAccessToken(userId: string) {
-  try {
-    // Get user from Firebase Auth
-    const user = await admin.auth().getUser(userId);
-    
-    // Find Google provider data
-    const googleProvider = user.providerData.find(
-      provider => provider.providerId === 'google.com'
-    );
-    
-    if (!googleProvider) {
-      throw new functions.https.HttpsError(
-        'failed-precondition',
-        'User not connected with Google'
-      );
-    }
-    
-    // For production, implement token refresh with OAuth
-    // This is a simplified example - you'd need proper OAuth token refresh
-    
-    // Generate a custom token that can be used for Firebase auth
-    const customToken = await admin.auth().createCustomToken(userId);
-    
-    return { accessToken: customToken };
-  } catch (error) {
-    console.error('Error getting Google token:', error);
-    throw new functions.https.HttpsError(
-      'internal',
-      'Failed to get Google access token',
-      error
-    );
-  }
-}
-
-// Helper: Ensure a folder exists in Google Drive, create if needed
-async function ensureFolder(drive: drive_v3.Drive, name: string, parentId?: string | null) {
-  try {
-    // Search for existing folder
-    let query = `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    if (parentId) {
-      query += ` and '${parentId}' in parents`;
-    }
-    
-    const res = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)',
-      spaces: 'drive'
-    });
-    
-    // Return existing folder if found
-    if (res.data.files && res.data.files.length > 0) {
-      return res.data.files[0].id;
-    }
-    
-    // Create new folder if not found
-    const folderMetadata: drive_v3.Schema$File = {
-      name: name,
-      mimeType: 'application/vnd.google-apps.folder',
-      ...(parentId && { parents: [parentId] })
-    };
-    
-    const folder = await drive.files.create({
-      requestBody: folderMetadata,
-      fields: 'id'
-    });
-    
-    return folder.data.id;
-  } catch (error) {
-    console.error(`Error ensuring folder "${name}":`, error);
-    throw error;
-  }
-}
-
-// Upload to Google Drive
-export const uploadToGoogleDrive = functions.https.onCall(async (request, context: HttpsCallableContext) => {
-  // Explicitly type-check for auth
-  if (!context || !context.auth) {
+/**
+ * Gets a user's Google access token using their refresh token stored in Firestore
+ */
+export const getGoogleAccessToken = functions.https.onCall(async (data, context) => {
+  // Check if user is authenticated
+  if (!context.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
-      'Authentication required to upload files'
+      'User must be authenticated to get a token'
     );
   }
 
-  // Cast request data to our expected type after validation
-  const data = request.data as unknown as UploadToGoogleDriveData;
-  
-  if (!data.fileData || !data.fileName) {
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      'File data and file name are required'
-    );
-  }
+  const userId = context.auth.uid;
   
   try {
-    // Get Google access token for user
-    const { accessToken } = await getGoogleAccessToken(context.auth.uid);
+    // Get user document from Firestore
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userData = userDoc.data();
     
-    // Initialize Google Drive API
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: accessToken });
-    const drive = google.drive({ version: 'v3', auth });
-    
-    // Create folder structure
-    // 1. Root folder
-    const rootFolderName = 'StageVault Recordings';
-    const rootFolderId = await ensureFolder(drive, rootFolderName);
-    
-    // 2. Performance folder
-    const performanceFolderName = data.metadata?.performanceId 
-      ? `Performance-${data.metadata.performanceId}` 
-      : 'Untitled Performance';
-    
-    const performanceFolderId = await ensureFolder(
-      drive, 
-      performanceFolderName,
-      rootFolderId
-    );
-    
-    // 3. Rehearsal folder (if needed)
-    let parentFolderId = performanceFolderId;
-    if (data.metadata?.rehearsalId) {
-      const rehearsalFolderName = `Rehearsal-${data.metadata.rehearsalId}`;
-      const rehearsalFolderId = await ensureFolder(
-        drive, 
-        rehearsalFolderName,
-        performanceFolderId
+    if (!userData || !userData.googleRefreshToken) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'User has not connected Google Drive'
       );
-      parentFolderId = rehearsalFolderId;
     }
     
-    // Prepare file metadata
-    const fileMetadata: drive_v3.Schema$File = {
-      name: data.fileName,
-      parents: parentFolderId ? [parentFolderId] : undefined,
-      description: data.metadata?.description || ''
-    };
+    // Initialize OAuth2 client
+    const oauth2Client = getOAuth2Client();
     
-    // Convert base64 to buffer
-    const fileContent = Buffer.from(
-      data.fileData.replace(/^data:[^;]+;base64,/, ''),
-      'base64'
-    );
-    
-    // Upload video file
-    const fileResponse = await drive.files.create({
-      requestBody: fileMetadata,
-      media: {
-        mimeType: data.mimeType || 'video/mp4',
-        body: fileContent
-      },
-      fields: 'id, webViewLink'
+    // Set refresh token
+    oauth2Client.setCredentials({
+      refresh_token: userData.googleRefreshToken
     });
     
-    const fileId = fileResponse.data?.id;
-    const webViewLink = fileResponse.data?.webViewLink;
+    // Get new access token
+    const tokenResponse = await oauth2Client.getAccessToken();
     
-    // Create record in Firestore
-    const recordingRef = await admin.firestore().collection('recordings').add({
-      title: data.metadata?.title || 'Untitled Recording',
-      performanceId: data.metadata?.performanceId,
-      rehearsalId: data.metadata?.rehearsalId,
-      googleFileId: fileId,
-      videoUrl: webViewLink,
-      sourceType: 'uploaded',
-      userId: context.auth.uid,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    if (!tokenResponse.token) {
+      throw new functions.https.HttpsError(
+        'internal',
+        'Failed to get access token'
+      );
+    }
     
     return {
-      success: true,
-      fileId,
-      recordingId: recordingRef.id,
-      videoUrl: webViewLink
+      accessToken: tokenResponse.token,
+      expiryDate: tokenResponse.res?.data?.expiry_date
     };
   } catch (error) {
-    console.error('Error uploading to Google Drive:', error);
+    console.error('Error getting access token:', error);
     throw new functions.https.HttpsError(
       'internal',
-      'Failed to upload to Google Drive',
-      error
+      'Failed to get Google access token'
     );
   }
 });
 
-// Find a folder by name
-async function findFolder(drive: drive_v3.Drive, name: string, parentId?: string | null) {
-  try {
-    let query = `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    if (parentId) {
-      query += ` and '${parentId}' in parents`;
-    }
-    
-    const res = await drive.files.list({
-      q: query,
-      fields: 'files(id, name)',
-      spaces: 'drive'
-    });
-    
-    if (res.data.files && res.data.files.length > 0) {
-      return res.data.files[0].id;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error(`Error finding folder "${name}":`, error);
-    throw error;
-  }
-}
-
-// Delete from Google Drive
-export const deleteFromGoogleDrive = functions.https.onCall(async (request, context: HttpsCallableContext) => {
-  // Explicitly type-check for auth
-  if (!context || !context.auth) {
+/**
+ * Creates a folder in the user's Google Drive
+ */
+export const createGoogleDriveFolder = functions.https.onCall(async (data, context) => {
+  // Check if user is authenticated
+  if (!context.auth) {
     throw new functions.https.HttpsError(
       'unauthenticated',
-      'Authentication required to delete files'
+      'User must be authenticated to create folders'
     );
   }
   
-  // Cast request data to our expected type after validation
-  const data = request.data as unknown as DeleteFromGoogleDriveData;
+  const { folderName, parentFolderId, metadata = {} } = data;
+  const userId = context.auth.uid;
   
-  if (!data.type) {
+  if (!folderName) {
     throw new functions.https.HttpsError(
       'invalid-argument',
-      'Type is required for deletion'
+      'Folder name is required'
     );
   }
   
   try {
-    // Get Google access token for user
-    const { accessToken } = await getGoogleAccessToken(context.auth.uid);
+    // Get user document from Firestore
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userData = userDoc.data();
     
-    // Initialize Google Drive API
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: accessToken });
-    const drive = google.drive({ version: 'v3', auth });
-    
-    // Find root folder
-    const rootFolderName = 'StageVault Recordings';
-    const rootFolderId = await findFolder(drive, rootFolderName);
-    
-    if (!rootFolderId) {
-      // Nothing to delete if root folder doesn't exist
-      return { success: true, message: 'Nothing to delete' };
+    if (!userData || !userData.googleRefreshToken) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'User has not connected Google Drive'
+      );
     }
     
-    const { type } = data;
+    // Initialize OAuth2 client
+    const oauth2Client = getOAuth2Client();
     
-    switch (type) {
-      case 'performance': {
-        // Find and delete performance folder
-        if (data.performanceTitle) {
-          const performanceFolderId = await findFolder(
-            drive, 
-            data.performanceTitle,
-            rootFolderId
-          );
-          
-          if (performanceFolderId) {
-            await drive.files.delete({
-              fileId: performanceFolderId
-            });
-          }
-        }
-        
-        break;
+    // Set refresh token
+    oauth2Client.setCredentials({
+      refresh_token: userData.googleRefreshToken
+    });
+    
+    // Initialize Drive API
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Prepare folder creation request
+    const folderMetadata: any = {
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+      properties: {
+        appId: 'stagevault',
+        ...metadata
       }
-      
-      case 'rehearsal': {
-        // Find performance folder
-        if (data.performanceTitle) {
-          const performanceFolderId = await findFolder(
-            drive, 
-            data.performanceTitle,
-            rootFolderId
-          );
-          
-          if (performanceFolderId && data.rehearsalTitle) {
-            // Find and delete rehearsal folder
-            const rehearsalFolderId = await findFolder(
-              drive, 
-              data.rehearsalTitle,
-              performanceFolderId
-            );
-            
-            if (rehearsalFolderId) {
-              await drive.files.delete({
-                fileId: rehearsalFolderId
-              });
-            }
-          }
-        }
-        
-        break;
-      }
-      
-      case 'recording': {
-        // Handle recording file and thumbnail deletion
-        // Find performance folder
-        if (data.performanceTitle) {
-          const performanceFolderId = await findFolder(
-            drive, 
-            data.performanceTitle,
-            rootFolderId
-          );
-          
-          if (performanceFolderId && data.rehearsalTitle) {
-            // Find rehearsal folder
-            const rehearsalFolderId = await findFolder(
-              drive, 
-              data.rehearsalTitle,
-              performanceFolderId
-            );
-            
-            if (rehearsalFolderId && data.recordingTitle) {
-              // Search for files matching the recording title
-              const query = `'${rehearsalFolderId}' in parents and (name='${data.recordingTitle}.mp4' or name='${data.recordingTitle}_thumb.jpg') and trashed=false`;
-              
-              const res = await drive.files.list({
-                q: query,
-                fields: 'files(id, name)',
-                spaces: 'drive'
-              });
-              
-              if (res.data.files && res.data.files.length > 0) {
-                // Delete each matching file
-                for (const file of res.data.files) {
-                  if (file.id) {
-                    await drive.files.delete({
-                      fileId: file.id
-                    });
-                  }
-                }
-              }
-            }
-          }
-        }
-        
-        break;
-      }
-      
-      default:
-        throw new functions.https.HttpsError(
-          'invalid-argument',
-          `Invalid delete type: ${type}`
-        );
+    };
+    
+    // Add parent folder if provided
+    if (parentFolderId) {
+      folderMetadata.parents = [parentFolderId];
     }
+    
+    // Create folder
+    const response = await drive.files.create({
+      requestBody: folderMetadata,
+      fields: 'id, name, webViewLink'
+    });
+    
+    return {
+      id: response.data.id,
+      name: response.data.name,
+      webViewLink: response.data.webViewLink
+    };
+  } catch (error) {
+    console.error('Error creating folder:', error);
+    throw new functions.https.HttpsError(
+      'internal',
+      'Failed to create folder in Google Drive'
+    );
+  }
+});
+
+/**
+ * Upload a file to Google Drive
+ */
+export const uploadToGoogleDrive = functions.https.onCall(async (data, context) => {
+  // Check if user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      'unauthenticated',
+      'User must be authenticated to upload files'
+    );
+  }
+  
+  const { fileData, fileName, mimeType, folderId, metadata = {} } = data;
+  const userId = context.auth.uid;
+  
+  if (!fileData || !fileName || !mimeType) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'File data, name, and MIME type are required'
+    );
+  }
+  
+  try {
+    // Get user document from Firestore
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    
+    if (!userData || !userData.googleRefreshToken) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'User has not connected Google Drive'
+      );
+    }
+    
+    // Initialize OAuth2 client
+    const oauth2Client = getOAuth2Client();
+    
+    // Set refresh token
+    oauth2Client.setCredentials({
+      refresh_token: userData.googleRefreshToken
+    });
+    
+    // Initialize Drive API
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // If we don't have a folder ID, make sure we have a StageVault folder
+    let parentFolderId = folderId;
+    
+    if (!parentFolderId) {
+      // Check if app folder already exists
+      const folderQuery = await drive.files.list({
+        q: `name='StageVault' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: 'files(id)'
+      });
+      
+      if (folderQuery.data.files && folderQuery.data.files.length > 0) {
+        parentFolderId = folderQuery.data.files[0].id;
+      } else {
+        // Create app folder
+        const folderResponse = await drive.files.create({
+          requestBody: {
+            name: 'StageVault',
+            mimeType: 'application/vnd.google-apps.folder',
+            properties: {
+              appId: 'stagevault'
+            }
+          },
+          fields: 'id'
+        });
+        parentFolderId = folderResponse.data.id;
+      }
+    }
+    
+    // Remove data URL prefix if present
+    const base64Data = fileData.includes('base64,') 
+      ? fileData.split('base64,')[1] 
+      : fileData;
+    
+    // Prepare file metadata
+    const fileMetadata: any = {
+      name: fileName,
+      mimeType: mimeType,
+      parents: [parentFolderId],
+      properties: {
+        appId: 'stagevault',
+        userId: userId,
+        ...metadata
+      }
+    };
+    
+    // Upload file
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media: {
+        mimeType: mimeType,
+        body: Buffer.from(base64Data, 'base64')
+      },
+      fields: 'id, name, mimeType, webViewLink, webContentLink, thumbnailLink'
+    });
+    
+    // Make file readable without authentication
+    await drive.permissions.create({
+      fileId: response.data.id as string,
+      requestBody: {
+        role: 'reader',
+        type: 'anyone'
+      }
+    });
+    
+    return {
+      id: response.data.id,
+      name: response.data.name,
+      mimeType: response.data.mimeType,
+      webViewLink: response.data.webViewLink,
+      webContentLink: response.data.webContentLink,
+      thumbnailLink: response.data.thumbnailLink
+    };
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    throw new functions.https.HttpsError(
+      'internal',
+      'Failed to upload file to Google Drive'
+    );
+  }
+});
+
+/**
+ * Delete a file from Google Drive
+ */
+export const deleteFromGoogleDrive = functions.https.onCall(async (data, context) => {
+  // Check if user is authenticated
+  if (!context.auth) {
+    throw new functions.https.HttpsError(
+      'unauthenticated',
+      'User must be authenticated to delete files'
+    );
+  }
+  
+  const { fileId } = data;
+  const userId = context.auth.uid;
+  
+  if (!fileId) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      'File ID is required'
+    );
+  }
+  
+  try {
+    // Get user document from Firestore
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    const userData = userDoc.data();
+    
+    if (!userData || !userData.googleRefreshToken) {
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        'User has not connected Google Drive'
+      );
+    }
+    
+    // Initialize OAuth2 client
+    const oauth2Client = getOAuth2Client();
+    
+    // Set refresh token
+    oauth2Client.setCredentials({
+      refresh_token: userData.googleRefreshToken
+    });
+    
+    // Initialize Drive API
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Delete file
+    await drive.files.delete({
+      fileId: fileId
+    });
     
     return { success: true };
   } catch (error) {
-    console.error('Error deleting from Google Drive:', error);
+    console.error('Error deleting file:', error);
     throw new functions.https.HttpsError(
       'internal',
-      'Failed to delete from Google Drive',
-      error
+      'Failed to delete file from Google Drive'
     );
   }
 });

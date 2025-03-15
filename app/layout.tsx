@@ -1,32 +1,35 @@
-import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import './globals.css';
+import { Inter } from 'next/font/google';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { PerformanceProvider } from '@/contexts/PerformanceContext';
 import Navigation from '@/components/Navigation';
+import { FirebaseInitializer } from '@/components/FirebaseInitializer';
 
 const inter = Inter({ subsets: ['latin'] });
 
-export const metadata: Metadata = {
+export const metadata = {
   title: 'StageVault',
-  description: 'Record and manage your dance rehearsals',
+  description: 'Manage your performances and recordings',
 };
 
 export default function RootLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
   return (
-    <AuthProvider>
-      <PerformanceProvider>
-        <html lang="en">
-          <body className={inter.className}>
+    <html lang="en">
+      <body className={inter.className}>
+        <FirebaseInitializer />
+        <AuthProvider>
+          <PerformanceProvider>
             <Navigation />
-            <main>{children}</main>
-          </body>
-        </html>
-      </PerformanceProvider>
-    </AuthProvider>
+            <main className="min-h-screen bg-gray-50">
+              {children}
+            </main>
+          </PerformanceProvider>
+        </AuthProvider>
+      </body>
+    </html>
   );
 }

@@ -1,16 +1,19 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { FcGoogle } from 'react-icons/fc';
+import { auth } from '@/lib/firebase';
 
 export default function SignInPage() {
   const { user, loading, error, login } = useAuth();
   const router = useRouter();
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && user) {
+      // User is signed in, redirect to home
       router.push('/');
     }
   }, [user, loading, router]);
@@ -18,8 +21,31 @@ export default function SignInPage() {
   const handleSignIn = async () => {
     try {
       await login();
+      
+      // After successful login, get the ID token
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        const idToken = await currentUser.getIdToken();
+        
+        // Create session cookie via API
+        const response = await fetch('/api/auth/session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ idToken }),
+        });
+        
+        if (response.ok) {
+          router.push('/');
+        } else {
+          const data = await response.json();
+          setAuthError(data.error || 'Failed to create session');
+        }
+      }
     } catch (err) {
       console.error('Sign in error:', err);
+      setAuthError((err as Error).message || 'Authentication failed');
     }
   };
 
@@ -39,9 +65,9 @@ export default function SignInPage() {
           <p className="mt-2 text-gray-600">Sign in to manage your performances</p>
         </div>
 
-        {error && (
+        {(error || authError) && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-            {error}
+            {error || authError}
           </div>
         )}
 

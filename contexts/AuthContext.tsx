@@ -5,15 +5,15 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { 
-  User, 
+  User,
   signInWithPopup, 
   GoogleAuthProvider, 
-  signOut, 
+  signOut as firebaseSignOut,
   onAuthStateChanged,
-  AuthErrorCodes
+  signInWithCustomToken,
 } from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface AuthContextType {
   user: User | null;
@@ -23,6 +23,7 @@ interface AuthContextType {
   setIsGoogleDriveConnected: (isConnected: boolean) => void;
   login: () => Promise<void>;
   logout: () => Promise<void>;
+  getIdToken: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -41,18 +42,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [error, setError] = useState<string | null>(null);
   const [isGoogleDriveConnected, setIsGoogleDriveConnected] = useState(false);
 
+  // Check auth state on mount
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       
       if (currentUser) {
         try {
-          // Check if user has Google Drive connected
+          // Check if user exists in Firestore
           const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          
           if (userDoc.exists()) {
+            // User exists, check Google Drive connection
             setIsGoogleDriveConnected(userDoc.data().isGoogleDriveConnected || false);
           } else {
-            // Create user document if it doesn't exist
+            // Create new user document
             await setDoc(doc(db, 'users', currentUser.uid), {
               email: currentUser.email,
               displayName: currentUser.displayName,
@@ -63,45 +67,60 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             setIsGoogleDriveConnected(false);
           }
         } catch (err) {
-          console.error('Error checking Google Drive connection:', err);
+          console.error('Error checking user data:', err);
         }
       }
       
       setLoading(false);
     });
 
+    // Cleanup subscription
     return () => unsubscribe();
   }, []);
 
+  // Sign in with Google
   const login = async () => {
     setError(null);
     try {
+      // Create provider with more comprehensive Drive scopes
       const provider = new GoogleAuthProvider();
+      
+      // Add scopes for Google Drive access
+      provider.addScope('https://www.googleapis.com/auth/drive.file');          // Create/read/update/delete files the app created
+      provider.addScope('https://www.googleapis.com/auth/drive.appdata');       // Application data folder (hidden from users)
+      provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly'); // View file metadata
+      
+      // Sign in with popup
       await signInWithPopup(auth, provider);
     } catch (err: any) {
-      if (err.code) {
-        setError(err.message || 'An error occurred during sign in');
-      } else {
-        setError('An unknown error occurred during sign in');
-      }
       console.error('Login error:', err);
+      setError(err.message || 'An error occurred during sign in');
     }
   };
 
+  // Sign out
   const logout = async () => {
     setError(null);
     try {
-      await signOut(auth);
+      await firebaseSignOut(auth);
     } catch (err: any) {
-      if (err.code) {
-        setError(err.message || 'An error occurred during sign out');
-      } else {
-        setError('An unknown error occurred during sign out');
-      }
       console.error('Logout error:', err);
+      setError(err.message || 'An error occurred during sign out');
     }
   };
 
+  // Get ID token for API calls
+  const getIdToken = async (): Promise<string | null> => {
+    if (!user) return null;
+    try {
+      return await user.getIdToken();
+    } catch (err) {
+      console.error('Error getting ID token:', err);
+      return null;
+    }
+  };
+
+  // Context value
   const value = {
     user,
     loading,
@@ -109,7 +128,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     isGoogleDriveConnected,
     setIsGoogleDriveConnected,
     login,
-    logout
+    logout,
+    getIdToken
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
