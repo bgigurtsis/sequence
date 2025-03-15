@@ -4,6 +4,9 @@ import { google, drive_v3 } from 'googleapis';
 
 admin.initializeApp();
 
+// Import specific types for better TypeScript integration
+type HttpsCallableContext = functions.https.CallableContext;
+
 // Types for Google Drive functions
 interface UploadToGoogleDriveData {
   fileData: string;
@@ -103,7 +106,7 @@ async function ensureFolder(drive: drive_v3.Drive, name: string, parentId?: stri
 }
 
 // Upload to Google Drive
-export const uploadToGoogleDrive = functions.https.onCall(async (request, context) => {
+export const uploadToGoogleDrive = functions.https.onCall(async (request, context: HttpsCallableContext) => {
   // Explicitly type-check for auth
   if (!context || !context.auth) {
     throw new functions.https.HttpsError(
@@ -239,7 +242,7 @@ async function findFolder(drive: drive_v3.Drive, name: string, parentId?: string
 }
 
 // Delete from Google Drive
-export const deleteFromGoogleDrive = functions.https.onCall(async (request, context) => {
+export const deleteFromGoogleDrive = functions.https.onCall(async (request, context: HttpsCallableContext) => {
   // Explicitly type-check for auth
   if (!context || !context.auth) {
     throw new functions.https.HttpsError(
