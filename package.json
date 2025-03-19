@@ -9,19 +9,29 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "assert": "^2.1.0",
+    "buffer": "^6.0.3",
+    "cookie": "^1.0.2",
     "firebase": "^11.4.0",
     "firebase-admin": "^13.1.0",
     "google-auth-library": "^9.4.1",
     "googleapis": "^144.0.0",
     "lucide-react": "^0.291.0",
     "next": "14.0.1",
+    "next-transpile-modules": "^10.0.1",
+    "pg": "^8.14.0",
+    "process": "^0.11.10",
     "react": "^18",
     "react-dom": "^18",
     "react-icons": "^4.11.0",
-    "react-webcam": "^7.2.0"
+    "react-webcam": "^7.2.0",
+    "stream-browserify": "^3.0.0",
+    "util": "^0.12.5"
   },
   "devDependencies": {
+    "@types/cookie": "^0.6.0",
     "@types/node": "^20",
+    "@types/pg": "^8.11.11",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10.0.1",

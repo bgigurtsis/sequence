@@ -444,7 +444,7 @@ export const PerformanceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const performanceSnap = await getDoc(performanceRef);
       
       if (performanceSnap.exists()) {
-        return { 
+              return {
           id: performanceSnap.id, 
           ...(performanceSnap.data() as Omit<Performance, 'id'>) 
         };

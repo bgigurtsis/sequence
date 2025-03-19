@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
+const webpack = require('webpack');
+
 const nextConfig = {
   reactStrictMode: true,
-  output: 'export',
   images: {
     unoptimized: true,
     remotePatterns: [
@@ -14,6 +15,28 @@ const nextConfig = {
         hostname: 'lh3.googleusercontent.com',
       }
     ],
+  },
+  webpack: (config, { isServer }) => {
+    // Fixes npm packages that depend on `node:` protocol
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        process: require.resolve('process/browser'),
+        stream: require.resolve('stream-browserify'),
+        util: require.resolve('util/'),
+        buffer: require.resolve('buffer/'),
+        assert: require.resolve('assert/'),
+      };
+      
+      config.plugins.push(
+        new webpack.ProvidePlugin({
+          process: 'process/browser',
+          Buffer: ['buffer', 'Buffer'],
+        }),
+      );
+    }
+    
+    return config;
   },
   async rewrites() {
     return [

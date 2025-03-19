@@ -82,19 +82,42 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const login = async () => {
     setError(null);
     try {
-      // Create provider with more comprehensive Drive scopes
+      setLoading(true);
+      
+      // 1. Start Google OAuth flow
       const provider = new GoogleAuthProvider();
+      provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+      provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
       
-      // Add scopes for Google Drive access
-      provider.addScope('https://www.googleapis.com/auth/drive.file');          // Create/read/update/delete files the app created
-      provider.addScope('https://www.googleapis.com/auth/drive.appdata');       // Application data folder (hidden from users)
-      provider.addScope('https://www.googleapis.com/auth/drive.metadata.readonly'); // View file metadata
+      // For Google Drive access (if needed)
+      provider.addScope('https://www.googleapis.com/auth/drive.file');
       
-      // Sign in with popup
-      await signInWithPopup(auth, provider);
-    } catch (err: any) {
-      console.error('Login error:', err);
-      setError(err.message || 'An error occurred during sign in');
+      // 2. Sign in with popup or redirect
+      const result = await signInWithPopup(auth, provider);
+      
+      // 3. Get the ID token
+      const idToken = await result.user.getIdToken();
+      
+      // 4. Send token to your backend to create a session cookie
+      const response = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ idToken }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to create session');
+      }
+      
+      // 5. Get user data and update state
+      setUser(result.user);
+    } catch (error) {
+      console.error('Error signing in with Google:', error);
+      setError(error instanceof Error ? error.message : 'An error occurred');
+    } finally {
+      setLoading(false);
     }
   };
 

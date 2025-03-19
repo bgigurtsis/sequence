@@ -34,7 +34,7 @@ export async function getOrCreateUser(userId: string) {
       [userId]
     );
 
-    if (existingUser.rowCount > 0) {
+    if (existingUser && existingUser.rowCount && existingUser.rowCount > 0) {
       return existingUser.rows[0];
     }
 

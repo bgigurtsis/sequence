@@ -1,49 +1,71 @@
 // lib/firebase-admin.ts
 // This file initializes Firebase Admin SDK for server-side operations
 
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
+import * as admin from 'firebase-admin';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 
-let adminApp: App;
-
-export function appInitialize(serviceAccount?: any) {
-  if (getApps().length === 0) {
-    // Use provided service account or try to get from environment
-    const credentials = serviceAccount || 
-      (process.env.FIREBASE_SERVICE_ACCOUNT_KEY 
-        ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY) 
-        : undefined);
-    
-    adminApp = initializeApp({
-      credential: credentials 
-        ? cert(credentials) 
-        : undefined,
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    });
-    
-    console.log('Firebase Admin initialized');
-  } else {
-    adminApp = getApps()[0];
+export function appInitialize() {
+  if (!admin.apps.length) {
+    try {
+      // Get the Base64 encoded service account key
+      const serviceAccountBase64 = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+      
+      // Check if it exists
+      if (!serviceAccountBase64) {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY environment variable is not set');
+      }
+      
+      // Decode the Base64 string and parse as JSON
+      const serviceAccount = JSON.parse(
+        Buffer.from(serviceAccountBase64, 'base64').toString()
+      );
+      
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    } catch (error) {
+      console.error('Firebase admin initialization error:', error);
+    }
   }
-  
-  return adminApp;
+  return admin;
 }
 
 // Admin SDK services getters
 export function getAdminAuth() {
-  if (!adminApp) appInitialize();
+  if (!admin.apps.length) appInitialize();
   return getAuth();
 }
 
 export function getAdminFirestore() {
-  if (!adminApp) appInitialize();
+  if (!admin.apps.length) appInitialize();
   return getFirestore();
 }
 
 export function getAdminStorage() {
-  if (!adminApp) appInitialize();
+  if (!admin.apps.length) appInitialize();
   return getStorage();
+}
+
+export function initializeAdminSDK() {
+  if (!admin.apps.length) {
+    try {
+      const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+      
+      if (!serviceAccountJson) {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT_KEY environment variable is not set');
+      }
+      
+      // If your key is Base64 encoded
+      const serviceAccount = JSON.parse(Buffer.from(serviceAccountJson, 'base64').toString());
+      
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    } catch (error) {
+      console.error('Firebase admin initialization error:', error);
+    }
+  }
+  return admin;
 } 

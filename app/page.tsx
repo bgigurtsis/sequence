@@ -27,7 +27,7 @@ export default function Home() {
       <div className="mb-8">
         <AuthTest />
       </div>
-
+      
       {user ? (
         <div>
           <div className="flex justify-between items-center mb-6">
@@ -38,9 +38,9 @@ export default function Home() {
             >
               Add New Performance
             </Link>
-          </div>
-
-          {performances.length === 0 ? (
+              </div>
+              
+              {performances.length === 0 ? (
             <div className="bg-white rounded-lg shadow-md p-6 text-center">
               <p className="text-gray-600 mb-4">
                 You haven't created any performances yet.
@@ -51,8 +51,8 @@ export default function Home() {
               >
                 Create Your First Performance
               </Link>
-            </div>
-          ) : (
+                </div>
+              ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {performances.map((performance) => (
                 <Link
@@ -68,11 +68,11 @@ export default function Home() {
                         <span className="font-medium">Venue:</span> {performance.venue}
                       </p>
                     )}
-                  </div>
+          </div>
                 </Link>
               ))}
-            </div>
-          )}
+        </div>
+      )}
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
