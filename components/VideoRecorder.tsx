@@ -1,18 +1,31 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
 import { Camera, Square, Pause, Play } from 'lucide-react';
 
-type VideoRecorderProps = {
-  onRecordingComplete: (data: { videoBlob: Blob; thumbnail: string }) => void;
-};
+interface VideoRecorderProps {
+  rehearsalId: string;
+  onRecordingComplete: (recording: any) => void;
+}
 
-const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) => {
+const VideoRecorder: React.FC<VideoRecorderProps> = ({ rehearsalId, onRecordingComplete }) => {
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [thumbnail, setThumbnail] = useState<string | null>(null);
+  const [metadata, setMetadata] = useState({
+    title: '',
+    performers: [],
+    notes: '',
+    tags: [],
+    time: new Date().toLocaleTimeString(),
+    date: new Date().toLocaleDateString(),
+  });
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  
+  const { uploadRecording } = useGoogleDrive();
 
   const startRecording = async () => {
     try {
@@ -50,10 +63,12 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    setIsRecording(false);
-    setIsPaused(false);
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      setIsRecording(false);
+      setIsPaused(false);
+    }
   };
 
   const pauseRecording = () => {
@@ -93,18 +108,49 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
         ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
         canvas.toBlob((thumbnailBlob) => {
           if (thumbnailBlob) {
-            // Convert the blob to a base64 data URL so it persists across reloads.
+            // Convert the blob to a base64 data URL
             const reader = new FileReader();
             reader.onloadend = () => {
               const dataUrl = reader.result as string;
               setThumbnail(dataUrl);
-              onRecordingComplete({ videoBlob: blob, thumbnail: dataUrl });
+              
+              // Save the recording with the generated thumbnail
+              const videoBlob = new Blob(videoChunks, { type: 'video/mp4' });
+              handleSaveRecording(videoBlob, dataUrl);
             };
             reader.readAsDataURL(thumbnailBlob);
           }
         }, 'image/jpeg', 0.7);
       }
     });
+    
+    // Trigger the loadedmetadata event
+    videoElement.load();
+  };
+  
+  const handleSaveRecording = async (videoBlob: Blob, thumbnailUrl: string) => {
+    try {
+      // Create recording metadata
+      const recordingMetadata = {
+        ...metadata,
+        thumbnailUrl,
+        rehearsalId
+      };
+      
+      // Upload to Google Drive
+      const recording = await uploadRecording(rehearsalId, videoBlob, recordingMetadata);
+      
+      // Call the completion handler with the recording details
+      onRecordingComplete(recording);
+    } catch (error) {
+      console.error('Error saving recording:', error);
+    }
+  };
+
+  // Handle metadata changes
+  const handleMetadataChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setMetadata(prev => ({ ...prev, [name]: value }));
   };
 
   return (
@@ -120,34 +166,50 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
         )}
       </div>
 
-      <div className="flex justify-center space-x-4">
-        {!isRecording && recordedChunks.length === 0 && (
-          <button onClick={startRecording} className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg">
-            <Camera className="mr-2" size={20} />
-            Start Recording
-          </button>
-        )}
-
-        {isRecording && (
-          <>
-            {!isPaused ? (
-              <button onClick={pauseRecording} className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg">
-                <Pause className="mr-2" size={20} />
-                Pause Recording
-              </button>
-            ) : (
-              <button onClick={resumeRecording} className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg">
-                <Play className="mr-2" size={20} />
-                Resume Recording
-              </button>
-            )}
-            <button onClick={stopRecording} className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg">
-              <Square className="mr-2" size={20} />
-              Stop Recording
+      {recordedChunks.length > 0 ? (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Title
+            </label>
+            <input
+              type="text"
+              name="title"
+              value={metadata.title}
+              onChange={handleMetadataChange}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Enter a title for this recording"
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="flex justify-center space-x-4">
+          {!isRecording ? (
+            <button onClick={startRecording} className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg">
+              <Camera className="mr-2" size={20} />
+              Start Recording
             </button>
-          </>
-        )}
-      </div>
+          ) : (
+            <>
+              {!isPaused ? (
+                <button onClick={pauseRecording} className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg">
+                  <Pause className="mr-2" size={20} />
+                  Pause Recording
+                </button>
+              ) : (
+                <button onClick={resumeRecording} className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg">
+                  <Play className="mr-2" size={20} />
+                  Resume Recording
+                </button>
+              )}
+              <button onClick={stopRecording} className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg">
+                <Square className="mr-2" size={20} />
+                Stop Recording
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -1,281 +1,299 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useUser } from '@clerk/nextjs';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { GoogleDriveService } from '@/lib/googleDriveService';
+import { useAuth } from '@clerk/nextjs';
+import { hasGoogleConnection, getGoogleTokens } from '@/lib/clerkHelpers';
+import { Recording, Performance, Rehearsal } from '@/types';
 
-interface GoogleDriveContextType {
-  isConnected: boolean;
+// Create a new QueryClient instance
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+type GoogleDriveContextType = {
+  isInitialized: boolean;
+  needsGoogleAuth: boolean;
+  connectToGoogle: () => Promise<void>;
+  performances: Performance[];
+  rehearsals: Record<string, Rehearsal[]>;
+  recordings: Record<string, Recording[]>;
+  createPerformance: (name: string) => Promise<Performance>;
+  createRehearsal: (performanceId: string, name: string, location: string, date: string) => Promise<Rehearsal>;
+  uploadRecording: (rehearsalId: string, file: Blob, metadata: any) => Promise<Recording>;
+  deleteRecording: (recordingId: string, rehearsalId: string) => Promise<void>;
+  getRecordingUrl: (recordingId: string) => Promise<string>;
   isLoading: boolean;
-  error: string | null;
-  connectGoogleDrive: () => Promise<void>;
-  disconnectGoogleDrive: () => Promise<void>;
-  refreshStatus: () => Promise<void>;
-}
+  error: Error | null;
+};
 
 const GoogleDriveContext = createContext<GoogleDriveContextType | undefined>(undefined);
 
-export function GoogleDriveProvider({ children }: { children: React.ReactNode }) {
-  const { isSignedIn, isLoaded } = useUser();
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [driveService, setDriveService] = useState<GoogleDriveService | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [needsGoogleAuth, setNeedsGoogleAuth] = useState(false);
+  const { isLoaded, userId } = useAuth();
+  const queryClient = useQueryClient();
 
+  // Initialize Google Drive service
   useEffect(() => {
-    if (isLoaded && isSignedIn) {
-      refreshStatus();
-    } else if (isLoaded) {
-      setIsLoading(false);
-    }
-  }, [isLoaded, isSignedIn]);
+    if (!isLoaded || !userId) return;
 
-  const refreshStatus = async () => {
-    try {
-      setIsLoading(true);
-      
-      // Make sure user is authenticated
-      if (!isSignedIn) {
-        setIsConnected(false);
-        setError('You must be signed in to use Google Drive');
-        setIsLoading(false);
-        return;
-      }
-      
-      console.log('Checking Google Drive status...');
-      const response = await fetch('/api/auth/google-status', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'same-origin' // Ensure cookies are sent with the request
-      });
-
-      console.log('Google status response:', response.status, response.statusText);
-      
-      // Handle response status
-      if (response.status === 401) {
-        setIsConnected(false);
-        setError('You must be signed in to use Google Drive');
-        setIsLoading(false);
-        return;
-      }
-      
-      if (response.status === 404) {
-        console.error('API endpoint not found. Check that /api/auth/google-status exists.');
-        setIsConnected(false);
-        setError('API endpoint not found. Contact support.');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Get the response text first to check if it's HTML
-      const responseText = await response.text();
-      
-      // Check if response is HTML before trying to parse as JSON
-      if (responseText.includes('<!DOCTYPE') || responseText.includes('<html>')) {
-        console.error('Received HTML instead of JSON from google-status endpoint');
-        setIsConnected(false);
-        setError(`Server error: Received HTML instead of JSON. Status: ${response.status}`);
-        setIsLoading(false);
-        return;
-      }
-      
-      // Now try to parse the text as JSON
+    const initializeDriveService = async () => {
       try {
-        const data = JSON.parse(responseText);
-        console.log('Google Drive status data:', data);
+        const hasConnection = await hasGoogleConnection();
         
-        if (data.connected) {
-          setIsConnected(true);
-          setError(null);
-        } else {
-          setIsConnected(false);
-          setError(data.message || 'Not connected to Google Drive');
+        if (!hasConnection) {
+          setNeedsGoogleAuth(true);
+          return;
         }
-      } catch (err) {
-        console.error('Error parsing response:', err);
-        setIsConnected(false);
-        // Fix the TypeScript error by safely accessing the error message
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        setError(`Failed to parse response: ${errorMessage}`);
+
+        const tokens = await getGoogleTokens();
+        
+        if (!tokens?.access_token) {
+          setNeedsGoogleAuth(true);
+          return;
+        }
+
+        const service = new GoogleDriveService(tokens.access_token, tokens.refresh_token);
+        await service.initialize();
+        
+        setDriveService(service);
+        setIsInitialized(true);
+        setNeedsGoogleAuth(false);
+      } catch (error) {
+        console.error('Failed to initialize Google Drive service:', error);
+        setNeedsGoogleAuth(true);
       }
-      
-      setIsLoading(false);
-    } catch (err) {
-      console.error('Error checking Google Drive status:', err);
-      setIsConnected(false);
-      // Fix the TypeScript error by safely accessing the error message
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(`Failed to check connection: ${errorMessage}`);
-      setIsLoading(false);
+    };
+
+    initializeDriveService();
+  }, [isLoaded, userId]);
+
+  // Function to connect to Google
+  const connectToGoogle = async () => {
+    try {
+      const response = await fetch('/api/auth/google/authorize');
+      const { authUrl } = await response.json();
+      window.location.href = authUrl;
+    } catch (error) {
+      console.error('Error connecting to Google:', error);
+      throw error;
     }
   };
 
-  const connectGoogleDrive = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
+  // Query to get performances
+  const { 
+    data: performances = [], 
+    isLoading: isLoadingPerformances,
+    error: performancesError
+  } = useQuery({
+    queryKey: ['performances'],
+    queryFn: async () => {
+      if (!driveService) return [];
       
-      // Check if user is signed in
-      if (!isSignedIn) {
-        setError('You must be signed in to connect Google Drive');
-        setIsLoading(false);
-        return;
-      }
+      const performanceFolders = await driveService.getPerformances();
       
-      // Start the OAuth flow by getting the authorization URL from your backend
-      const response = await fetch('/api/auth/google-auth-url', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include'
-      });
+      return performanceFolders.map(folder => ({
+        id: folder.id,
+        title: folder.name,
+        defaultPerformers: [],
+        rehearsals: [],
+      }));
+    },
+    enabled: isInitialized && !!driveService,
+  });
+
+  // Mutation to create a performance
+  const createPerformanceMutation = useMutation({
+    mutationFn: async (name: string) => {
+      if (!driveService) throw new Error('Google Drive service not initialized');
       
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Failed to get Google auth URL:', errorText);
-        setError('Failed to start Google Drive connection');
-        setIsLoading(false);
-        return;
-      }
+      const folder = await driveService.createPerformance(name);
       
-      const { url } = await response.json();
-      
-      // Check that we got a valid URL
-      if (!url) {
-        console.error('No Google auth URL returned from API');
-        setError('Failed to start Google Drive connection');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Open Google OAuth consent screen in a popup
-      const popup = window.open(url, 'googleAuth', 'width=600,height=700');
-      
-      if (!popup) {
-        setError('Popup blocked. Please allow popups for this site.');
-        setIsLoading(false);
-        return;
-      }
-      
-      // Listen for the OAuth callback
-      const messageHandler = async (event: MessageEvent) => {
-        // Only process messages from our expected origin
-        if (event.origin !== window.location.origin) return;
-        
-        // Check if this is our OAuth callback message
-        if (event.data && event.data.type === 'GOOGLE_AUTH_CALLBACK') {
-          // Remove the event listener since we've received the message
-          window.removeEventListener('message', messageHandler);
-          
-          const { code, error: authError } = event.data;
-          
-          if (authError) {
-            setError(`Google authentication failed: ${authError}`);
-            setIsLoading(false);
-            return;
-          }
-          
-          if (!code) {
-            setError('No authorization code received from Google');
-            setIsLoading(false);
-            return;
-          }
-          
-          try {
-            // Exchange the code for tokens
-            const tokenResponse = await fetch('/api/auth/exchange-code', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ code }),
-              credentials: 'include'
-            });
-            
-            if (!tokenResponse.ok) {
-              const errorData = await tokenResponse.text();
-              console.error('Token exchange failed:', errorData);
-              setError('Failed to complete Google Drive connection');
-              setIsLoading(false);
-              return;
-            }
-            
-            const tokenData = await tokenResponse.json();
-            
-            // Check if we need to store the token client-side
-            if (tokenData.needsClientStorage && tokenData.token) {
-              // Store the token in localStorage
-              try {
-                const user = await fetch('/api/auth/me').then(res => res.json());
-                if (user && user.id) {
-                  localStorage.setItem(`google_token_${user.id}`, tokenData.token);
-                  console.log('Stored Google token in localStorage due to missing server-side storage');
-                }
-              } catch (localStorageError) {
-                console.error('Failed to store token in localStorage:', localStorageError);
-                // Continue anyway, as the connection might still work
-              }
-            }
-            
-            // Connection successful, refresh status
-            await refreshStatus();
-          } catch (error) {
-            console.error('Error connecting Google Drive:', error);
-            setError('Failed to connect Google Drive');
-            setIsLoading(false);
-          }
-        }
+      return {
+        id: folder.id,
+        title: folder.name,
+        defaultPerformers: [],
+        rehearsals: [],
       };
+    },
+    onSuccess: (newPerformance: Performance) => {
+      queryClient.setQueryData(['performances'], (old: Performance[] = []) => 
+        [...old, newPerformance]
+      );
+    },
+  });
+
+  // Simplified rehearsals state (in a real app, you'd use React Query for each performance's rehearsals)
+  const [rehearsals, setRehearsals] = useState<Record<string, Rehearsal[]>>({});
+
+  // Mutation to create a rehearsal
+  const createRehearsalMutation = useMutation({
+    mutationFn: async ({ 
+      performanceId, 
+      name, 
+      location, 
+      date 
+    }: { 
+      performanceId: string; 
+      name: string; 
+      location: string; 
+      date: string; 
+    }) => {
+      if (!driveService) throw new Error('Google Drive service not initialized');
       
-      // Add event listener for the popup callback
-      window.addEventListener('message', messageHandler);
+      const folder = await driveService.createRehearsal(performanceId, name);
       
-    } catch (error) {
-      console.error('Error connecting Google Drive:', error);
-      setError('Failed to connect Google Drive');
-      setIsLoading(false);
-    }
+      return {
+        id: folder.id,
+        title: folder.name,
+        location,
+        date,
+        recordings: [],
+        performanceId,
+        performanceTitle: performances.find((p: Performance) => p.id === performanceId)?.title,
+      };
+    },
+    onSuccess: (newRehearsal: Rehearsal) => {
+      setRehearsals(prev => ({
+        ...prev,
+        [newRehearsal.performanceId!]: [
+          ...(prev[newRehearsal.performanceId!] || []),
+          newRehearsal,
+        ],
+      }));
+    },
+  });
+
+  // Simplified recordings state
+  const [recordings, setRecordings] = useState<Record<string, Recording[]>>({});
+
+  // Mutation to upload a recording
+  const uploadRecordingMutation = useMutation({
+    mutationFn: async ({ 
+      rehearsalId, 
+      file, 
+      metadata 
+    }: { 
+      rehearsalId: string; 
+      file: Blob; 
+      metadata: any; 
+    }) => {
+      if (!driveService) throw new Error('Google Drive service not initialized');
+      
+      const filename = `${metadata.title || 'recording'}_${Date.now()}.mp4`;
+      
+      const uploadedFile = await driveService.uploadRecording(
+        rehearsalId,
+        file,
+        filename,
+        metadata
+      );
+      
+      const videoUrl = await driveService.getRecordingUrl(uploadedFile.id);
+      
+      return {
+        id: uploadedFile.id,
+        title: metadata.title || uploadedFile.name,
+        videoUrl,
+        thumbnailUrl: '', // In a real app, you'd generate or fetch this
+        time: metadata.time || new Date().toLocaleTimeString(),
+        date: metadata.date || new Date().toLocaleDateString(),
+        performers: metadata.performers || [],
+        notes: metadata.notes || '',
+        tags: metadata.tags || [],
+        rehearsalId,
+        sourceType: 'recorded',
+        syncStatus: 'synced',
+      };
+    },
+    onSuccess: (newRecording: Recording) => {
+      setRecordings(prev => ({
+        ...prev,
+        [newRecording.rehearsalId]: [
+          ...(prev[newRecording.rehearsalId] || []),
+          newRecording,
+        ],
+      }));
+    },
+  });
+
+  // Mutation to delete a recording
+  const deleteRecordingMutation = useMutation({
+    mutationFn: async ({ 
+      recordingId, 
+      rehearsalId 
+    }: { 
+      recordingId: string; 
+      rehearsalId: string; 
+    }) => {
+      if (!driveService) throw new Error('Google Drive service not initialized');
+      
+      await driveService.deleteFile(recordingId);
+      return { recordingId, rehearsalId };
+    },
+    onSuccess: ({ recordingId, rehearsalId }: { recordingId: string; rehearsalId: string }) => {
+      setRecordings(prev => ({
+        ...prev,
+        [rehearsalId]: (prev[rehearsalId] || []).filter(r => r.id !== recordingId),
+      }));
+    },
+  });
+
+  // Function to get a recording URL
+  const getRecordingUrl = async (recordingId: string): Promise<string> => {
+    if (!driveService) throw new Error('Google Drive service not initialized');
+    return driveService.getRecordingUrl(recordingId);
   };
 
-  const disconnectGoogleDrive = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      
-      const response = await fetch('/api/auth/google-disconnect', {
-        method: 'POST',
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to disconnect Google Drive');
-      }
-      
-      await refreshStatus();
-    } catch (error) {
-      console.error('Error disconnecting Google Drive:', error);
-      setError('Failed to disconnect Google Drive');
-      setIsLoading(false);
-    }
+  const contextValue: GoogleDriveContextType = {
+    isInitialized,
+    needsGoogleAuth,
+    connectToGoogle,
+    performances,
+    rehearsals,
+    recordings,
+    createPerformance: (name: string) => createPerformanceMutation.mutateAsync(name),
+    createRehearsal: (performanceId: string, name: string, location: string, date: string) => 
+      createRehearsalMutation.mutateAsync({ performanceId, name, location, date }),
+    uploadRecording: (rehearsalId: string, file: Blob, metadata: any) => 
+      uploadRecordingMutation.mutateAsync({ rehearsalId, file, metadata }),
+    deleteRecording: (recordingId: string, rehearsalId: string) => 
+      deleteRecordingMutation.mutateAsync({ recordingId, rehearsalId }),
+    getRecordingUrl,
+    isLoading: isLoadingPerformances || createPerformanceMutation.isPending || 
+               createRehearsalMutation.isPending || uploadRecordingMutation.isPending,
+    error: performancesError as Error || null,
   };
 
   return (
-    <GoogleDriveContext.Provider
-      value={{
-        isConnected,
-        isLoading,
-        error,
-        connectGoogleDrive,
-        disconnectGoogleDrive,
-        refreshStatus,
-      }}
-    >
+    <GoogleDriveContext.Provider value={contextValue}>
       {children}
     </GoogleDriveContext.Provider>
   );
-}
+};
 
-export function useGoogleDrive() {
+// Create a wrapper component that provides the QueryClient
+export const GoogleDriveProviderWithQueryClient: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GoogleDriveProvider>
+        {children}
+      </GoogleDriveProvider>
+    </QueryClientProvider>
+  );
+};
+
+// Custom hook to use the Google Drive context
+export const useGoogleDrive = () => {
   const context = useContext(GoogleDriveContext);
   
   if (context === undefined) {
@@ -283,4 +301,4 @@ export function useGoogleDrive() {
   }
   
   return context;
-} 
+}; 

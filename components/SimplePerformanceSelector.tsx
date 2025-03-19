@@ -1,52 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Performance, Recording, Rehearsal } from '../types';
-import { 
-  Plus, Edit, Play, Video, Clock, Calendar, 
-  ChevronDown, ChevronRight, Upload, Camera, Link as LinkIcon,
-  List, Grid, MoreVertical, PlusCircle
-} from 'lucide-react';
+import React, { useState } from 'react';
 import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
+import { PlusCircle, ChevronDown, ChevronRight } from 'lucide-react';
 
-interface PerformanceSelectorProps {
-  selectedPerformanceId: string;
-  performances: Performance[];
-  searchQuery?: string;
-  onSelectPerformance: (id: string) => void;
-  onWatchRecording: (rehearsalId: string, recording: Recording) => void;
-  onEditRehearsal: (rehearsal: Rehearsal) => void;
-  onEditPerformance: (performance: Performance) => void;
-  onRecordRehearsal: (rehearsalId: string) => void;
-  onNewRehearsal?: (performanceId: string) => void;
-  onEditRecording?: (rehearsalId: string, recording: Recording) => void;
-  onUploadRecording?: (rehearsalId: string) => void;
-  onLinkRecording?: (rehearsalId: string) => void;
-}
-
-const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
-  selectedPerformanceId,
-  performances,
-  searchQuery,
-  onSelectPerformance,
-  onWatchRecording,
-  onEditRehearsal,
-  onEditPerformance,
-  onRecordRehearsal,
-  onNewRehearsal,
-  onEditRecording,
-  onUploadRecording,
-  onLinkRecording
-}) => {
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const [expandedRehearsal, setExpandedRehearsal] = useState<{[key: string]: boolean}>({});
-  const [showRecordingOptions, setShowRecordingOptions] = useState<string | null>(null);
-  const recordingOptionsRef = useRef<HTMLDivElement>(null);
-  const [dropdownAnchorRect, setDropdownAnchorRect] = useState<DOMRect | null>(null);
+export default function SimplePerformanceSelector() {
   const [isCreatingPerformance, setIsCreatingPerformance] = useState(false);
   const [newPerformanceName, setNewPerformanceName] = useState('');
   const [expandedPerformanceIds, setExpandedPerformanceIds] = useState<string[]>([]);
-  const [isCreatingRehearsal, setIsCreatingRehearsal] = useState(false);
+  const [selectedPerformanceId, setSelectedPerformanceId] = useState<string | null>(null);
   
   const { 
+    performances, 
     rehearsals,
     createPerformance, 
     createRehearsal,
@@ -55,39 +18,6 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
     connectToGoogle
   } = useGoogleDrive();
 
-  // Format date function
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '';
-    const [day, month, year] = dateString.split('-');
-    return `${day}/${month}/${year}`;
-  };
-  
-  // Mock duration formatter
-  const formatDuration = (recording: Recording) => {
-    // This would ideally come from the actual recording metadata
-    return '2:34';
-  };
-  
-  // Toggle rehearsal expanded state
-  const toggleRehearsal = (rehearsalId: string) => {
-    setExpandedRehearsal(prev => ({
-      ...prev,
-      [rehearsalId]: !prev[rehearsalId]
-    }));
-  };
-  
-  // Toggle recording options dropdown
-  const toggleRecordingOptions = (rehearsalId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    
-    // Save the button's rect for positioning the dropdown
-    const buttonRect = e.currentTarget.getBoundingClientRect();
-    setDropdownAnchorRect(buttonRect);
-    
-    // Toggle the dropdown visibility
-    setShowRecordingOptions(prev => prev === rehearsalId ? null : rehearsalId);
-  };
-
   // Toggle performance expansion
   const togglePerformance = (performanceId: string) => {
     setExpandedPerformanceIds(prev => 
@@ -95,7 +25,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         ? prev.filter(id => id !== performanceId)
         : [...prev, performanceId]
     );
-    onSelectPerformance(performanceId);
+    setSelectedPerformanceId(performanceId);
   };
 
   // Handle creating a new performance
@@ -129,8 +59,6 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         newRehearsal.location,
         newRehearsal.date
       );
-      
-      setIsCreatingRehearsal(false);
       
       // Ensure the performance is expanded to show the new rehearsal
       if (!expandedPerformanceIds.includes(performanceId)) {
@@ -284,6 +212,4 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
       </div>
     </div>
   );
-};
-
-export default PerformanceSelector; 
+} 

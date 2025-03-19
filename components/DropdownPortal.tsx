@@ -1,73 +1,29 @@
-import React, { useEffect, useState } from 'react';
+import React, { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface DropdownPortalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-  anchorRect?: DOMRect | null;
+  children: ReactNode;
+  targetRect?: DOMRect | null;
 }
 
-const DropdownPortal: React.FC<DropdownPortalProps> = ({ 
-  isOpen, 
-  onClose, 
-  children,
-  anchorRect
-}) => {
-  const [portalElement, setPortalElement] = useState<HTMLElement | null>(null);
-
-  useEffect(() => {
-    // Create portal container when component mounts
-    const el = document.createElement('div');
-    el.className = 'recording-options-portal';
-    document.body.appendChild(el);
-    setPortalElement(el);
-
-    // Remove portal container when component unmounts
-    return () => {
-      if (el && document.body.contains(el)) {
-        document.body.removeChild(el);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    // Close dropdown when clicking outside
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (isOpen && !e.target.closest('.recording-options-content')) {
-        onClose();
-      }
-    };
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleOutsideClick);
-    }
-    
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-    };
-  }, [isOpen, onClose]);
-
-  if (!isOpen || !portalElement) return null;
-
-  // Position the dropdown near the anchor element if provided
-  const style: React.CSSProperties = {};
-  if (anchorRect) {
-    style.position = 'absolute';
-    style.top = `${anchorRect.bottom + window.scrollY + 5}px`;
-    style.left = `${anchorRect.left + window.scrollX}px`;
-    style.zIndex = 9999;
+export default function DropdownPortal({ children, targetRect }: DropdownPortalProps) {
+  // Only render in the browser, not during SSR
+  if (typeof window === 'undefined') {
+    return null;
   }
-
+  
+  // Create a portal to render the dropdown at the root level
   return createPortal(
     <div 
-      className="recording-options-content"
-      style={style}
+      style={{
+        position: 'absolute',
+        top: targetRect ? targetRect.bottom + window.scrollY : 0,
+        left: targetRect ? targetRect.left + window.scrollX : 0,
+        zIndex: 50,
+      }}
     >
       {children}
     </div>,
-    portalElement
+    document.body
   );
-};
-
-export default DropdownPortal; 
+} 
