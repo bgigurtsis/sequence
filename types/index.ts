@@ -7,22 +7,28 @@
 
 export interface Performance {
   id: string;
+  name: string;
   title: string;
   defaultPerformers: string[];
   rehearsals: Rehearsal[];
+  createdAt: string;
 }
 
 export interface Rehearsal {
   id: string;
+  name: string;
+  performanceId: string;
   title: string;
   location: string;
   date: string;
   recordings: Recording[];
+  createdAt: string;
 }
 
 export interface Recording {
   id: string;
   title: string;
+  name?: string;
   date: string;
   time?: string;
   videoUrl: string;
@@ -35,6 +41,7 @@ export interface Recording {
   externalUrl?: string;
   sourceType?: 'recorded' | 'uploaded' | 'external';
   domain?: string;
+  createdAt: string;
 }
 
 export interface Metadata {

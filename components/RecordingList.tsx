@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
 import { Recording } from '@/types';
-import { Play, Clock, Calendar, Trash2, ChevronDown, ChevronUp, Tag } from 'lucide-react';
+import { Play, Clock, Calendar, Trash2, ChevronDown, ChevronUp, Tag, Video } from 'lucide-react';
 
 interface RecordingListProps {
   rehearsalId: string;
@@ -10,141 +10,151 @@ interface RecordingListProps {
 
 export default function RecordingList({ rehearsalId, onSelectRecording }: RecordingListProps) {
   const [expandedRecordingId, setExpandedRecordingId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [recordingList, setRecordingList] = useState<Recording[]>([]);
-  
-  const { recordings, deleteRecording } = useGoogleDrive();
 
-  // Load recordings for this rehearsal
-  useEffect(() => {
-    setRecordingList(recordings[rehearsalId] || []);
-    setIsLoading(false);
-  }, [rehearsalId, recordings]);
+  const {
+    recordings,
+    isLoadingRecordings,
+    deleteFile
+  } = useGoogleDrive();
 
   // Toggle recording expansion
   const toggleRecording = (recordingId: string) => {
     setExpandedRecordingId(expandedRecordingId === recordingId ? null : recordingId);
   };
 
-  // Handle deleting a recording
+  // Handle recording deletion
   const handleDeleteRecording = async (recordingId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    
-    if (window.confirm('Are you sure you want to delete this recording?')) {
-      try {
-        await deleteRecording(recordingId, rehearsalId);
-      } catch (error) {
-        console.error('Error deleting recording:', error);
-      }
+
+    if (!window.confirm('Are you sure you want to delete this recording? This cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await deleteFile(recordingId);
+    } catch (error) {
+      console.error('Failed to delete recording:', error);
+      alert('Failed to delete recording');
     }
   };
 
-  if (isLoading) {
+  // Format recording date
+  const formatDate = (recording: Recording) => {
+    if (!recording.createdAt) return 'Unknown date';
+
+    const date = new Date(recording.createdAt);
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  // Format recording title
+  const getRecordingTitle = (recording: Recording) => {
+    return recording.title || (recording as any).name || 'Untitled Recording';
+  };
+
+  if (isLoadingRecordings) {
     return (
-      <div className="flex justify-center items-center py-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="p-4 text-center text-gray-500">
+        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-900 mx-auto mb-2"></div>
+        Loading recordings...
       </div>
     );
   }
 
-  if (recordingList.length === 0) {
+  if (recordings.length === 0) {
     return (
-      <div className="text-center py-8 text-gray-500">
-        <p>No recordings yet</p>
-        <p className="text-sm mt-2">Record or upload your first video!</p>
+      <div className="p-4 text-center text-gray-500">
+        No recordings found for this rehearsal.
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {recordingList.map((recording) => (
-        <div 
+    <div className="space-y-2">
+      {recordings.map((recording) => (
+        <div
           key={recording.id}
-          className="bg-white rounded-lg shadow-md overflow-hidden"
+          className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden"
         >
-          {/* Preview/Thumbnail area */}
-          <div 
-            className="relative aspect-video bg-gray-100 cursor-pointer"
-            onClick={() => onSelectRecording(recording)}
-          >
-            {recording.thumbnailUrl ? (
-              <img 
-                src={recording.thumbnailUrl} 
-                alt={recording.title} 
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center bg-gray-800">
-                <Play size={48} className="text-white opacity-75" />
-              </div>
-            )}
-            
-            <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-              <div className="bg-blue-600 text-white p-2 rounded-full">
-                <Play size={24} />
-              </div>
-            </div>
-          </div>
-          
-          {/* Recording info */}
-          <div 
-            className="p-4 cursor-pointer"
+          <div
+            className="p-3 flex items-center justify-between cursor-pointer hover:bg-gray-50"
             onClick={() => toggleRecording(recording.id)}
           >
-            <div className="flex justify-between items-start">
-              <h3 className="font-medium line-clamp-2">{recording.title}</h3>
-              <button 
+            <div className="flex items-center space-x-3">
+              <div className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center">
+                <Video className="w-4 h-4 text-indigo-600" />
+              </div>
+              <div>
+                <div className="font-medium text-gray-900">{getRecordingTitle(recording)}</div>
+                <div className="text-xs text-gray-500 flex items-center">
+                  <Calendar size={12} className="mr-1" />
+                  {formatDate(recording)}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center">
+              <button
+                className="p-2 text-indigo-600 hover:text-indigo-800 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectRecording(recording);
+                }}
+              >
+                <Play size={16} />
+              </button>
+
+              <button
+                className="p-2 text-red-600 hover:text-red-800 transition-colors"
                 onClick={(e) => handleDeleteRecording(recording.id, e)}
-                className="text-gray-400 hover:text-red-600 p-1"
               >
                 <Trash2 size={16} />
               </button>
-            </div>
-            
-            <div className="flex flex-wrap gap-y-1 gap-x-3 mt-2 text-xs text-gray-500">
-              <div className="flex items-center">
-                <Clock size={12} className="mr-1" />
-                {recording.time}
-              </div>
-              <div className="flex items-center">
-                <Calendar size={12} className="mr-1" />
-                {recording.date}
-              </div>
-            </div>
-            
-            <div className="flex justify-between items-center mt-2">
-              <div className="text-xs text-gray-500 truncate max-w-[80%]">
-                {recording.performers.join(', ')}
-              </div>
-              <div>
-                {expandedRecordingId === recording.id ? (
-                  <ChevronUp size={16} className="text-gray-400" />
-                ) : (
-                  <ChevronDown size={16} className="text-gray-400" />
-                )}
-              </div>
+
+              {expandedRecordingId === recording.id ? (
+                <ChevronUp size={16} className="text-gray-500" />
+              ) : (
+                <ChevronDown size={16} className="text-gray-500" />
+              )}
             </div>
           </div>
-          
-          {/* Expanded details */}
+
           {expandedRecordingId === recording.id && (
-            <div className="px-4 pb-4 pt-1 border-t border-gray-100">
+            <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
               {recording.notes && (
-                <div className="mb-3">
-                  <h4 className="text-xs font-medium text-gray-500 mb-1">Notes</h4>
+                <div className="mb-2">
+                  <div className="text-xs font-medium text-gray-500 mb-1">Notes</div>
                   <p className="text-sm text-gray-700">{recording.notes}</p>
                 </div>
               )}
-              
-              {recording.tags.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-medium text-gray-500 mb-1">Tags</h4>
+
+              {recording.performers && recording.performers.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-xs font-medium text-gray-500 mb-1">Performers</div>
                   <div className="flex flex-wrap gap-1">
-                    {recording.tags.map((tag, index) => (
-                      <span 
-                        key={index}
-                        className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800"
+                    {recording.performers.map((performer, idx) => (
+                      <span
+                        key={idx}
+                        className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded-full"
+                      >
+                        {performer}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {recording.tags && recording.tags.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-gray-500 mb-1">Tags</div>
+                  <div className="flex flex-wrap gap-1">
+                    {recording.tags.map((tag, idx) => (
+                      <span
+                        key={idx}
+                        className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full flex items-center"
                       >
                         <Tag size={10} className="mr-1" />
                         {tag}

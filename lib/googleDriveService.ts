@@ -1,123 +1,137 @@
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
+import { Performance, Rehearsal, Recording } from '@/types';
 
-export class GoogleDriveService {
-  private drive;
-  private oauth2Client;
-  private rootFolderName = process.env.STAGEVAULT_ROOT_FOLDER_NAME || 'StageVault Recordings';
+class GoogleDriveService {
+  private drive: any;
+  private oauth2Client: OAuth2Client | null = null;
+  private initialized: boolean = false;
   private rootFolderId: string | null = null;
 
-  constructor(accessToken: string, refreshToken?: string) {
-    this.oauth2Client = new OAuth2Client(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
-    
-    this.oauth2Client.setCredentials({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-
-    this.drive = google.drive({
-      version: 'v3',
-      auth: this.oauth2Client,
-    });
+  constructor() {
+    this.drive = null;
   }
 
-  async initialize(): Promise<void> {
+  async initialize(accessToken: string, refreshToken?: string): Promise<void> {
     try {
-      this.rootFolderId = await this.getOrCreateRootFolder();
+      this.oauth2Client = new OAuth2Client(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+      );
+
+      this.oauth2Client.setCredentials({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      this.drive = google.drive({
+        version: 'v3',
+        auth: this.oauth2Client,
+      });
+
+      // Create or find the root "StageVault" folder
+      this.rootFolderId = await this.findOrCreateRootFolder();
+      this.initialized = true;
     } catch (error) {
       console.error('Failed to initialize Google Drive service:', error);
-      throw new Error('Failed to initialize Google Drive service');
-    }
-  }
-
-  private async getOrCreateRootFolder(): Promise<string> {
-    try {
-      // Check if root folder exists
-      const response = await this.drive.files.list({
-        q: `name='${this.rootFolderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-        spaces: 'drive',
-        fields: 'files(id, name)',
-      });
-
-      if (response.data.files && response.data.files.length > 0) {
-        return response.data.files[0].id!;
-      }
-
-      // Create root folder if it doesn't exist
-      const folderMetadata = {
-        name: this.rootFolderName,
-        mimeType: 'application/vnd.google-apps.folder',
-      };
-
-      const folder = await this.drive.files.create({
-        requestBody: folderMetadata,
-        fields: 'id',
-      });
-
-      return folder.data.id!;
-    } catch (error) {
-      console.error('Error getting or creating root folder:', error);
       throw error;
     }
   }
 
-  async getPerformances(): Promise<{ id: string; name: string }[]> {
-    if (!this.rootFolderId) {
-      await this.initialize();
+  private async findOrCreateRootFolder(): Promise<string> {
+    const folderName = 'StageVault';
+
+    // Search for existing folder
+    const response = await this.drive.files.list({
+      q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+    });
+
+    if (response.data.files && response.data.files.length > 0) {
+      return response.data.files[0].id;
+    }
+
+    // Create folder if it doesn't exist
+    const folderMetadata = {
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+    };
+
+    const folder = await this.drive.files.create({
+      resource: folderMetadata,
+      fields: 'id',
+    });
+
+    return folder.data.id;
+  }
+
+  async getPerformances(): Promise<Performance[]> {
+    if (!this.initialized || !this.rootFolderId) {
+      throw new Error('Google Drive service not initialized');
     }
 
     const response = await this.drive.files.list({
       q: `'${this.rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name)',
+      fields: 'files(id, name, createdTime)',
+      orderBy: 'createdTime desc',
     });
 
-    return response.data.files?.map(file => ({
-      id: file.id!,
-      name: file.name!,
-    })) || [];
+    return response.data.files.map((file: any) => ({
+      id: file.id,
+      name: file.name,
+      createdAt: new Date(file.createdTime).toISOString(),
+    }));
   }
 
-  async createPerformance(name: string): Promise<{ id: string; name: string }> {
-    if (!this.rootFolderId) {
-      await this.initialize();
+  async createPerformance(name: string): Promise<Performance> {
+    if (!this.initialized || !this.rootFolderId) {
+      throw new Error('Google Drive service not initialized');
     }
 
     const folderMetadata = {
       name,
       mimeType: 'application/vnd.google-apps.folder',
-      parents: [this.rootFolderId!],
+      parents: [this.rootFolderId],
     };
 
     const folder = await this.drive.files.create({
-      requestBody: folderMetadata,
-      fields: 'id, name',
+      resource: folderMetadata,
+      fields: 'id, name, createdTime',
     });
 
     return {
-      id: folder.data.id!,
-      name: folder.data.name!,
+      id: folder.data.id,
+      name: folder.data.name,
+      createdAt: new Date(folder.data.createdTime).toISOString(),
     };
   }
 
-  async getRehearsals(performanceId: string): Promise<{ id: string; name: string }[]> {
+  async getRehearsals(performanceId: string): Promise<Rehearsal[]> {
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
     const response = await this.drive.files.list({
       q: `'${performanceId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name)',
+      fields: 'files(id, name, createdTime)',
+      orderBy: 'createdTime desc',
     });
 
-    return response.data.files?.map(file => ({
-      id: file.id!,
-      name: file.name!,
-    })) || [];
+    return response.data.files.map((file: any) => ({
+      id: file.id,
+      name: file.name,
+      performanceId,
+      createdAt: new Date(file.createdTime).toISOString(),
+    }));
   }
 
-  async createRehearsal(performanceId: string, name: string): Promise<{ id: string; name: string }> {
+  async createRehearsal(performanceId: string, name: string): Promise<Rehearsal> {
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
     const folderMetadata = {
       name,
       mimeType: 'application/vnd.google-apps.folder',
@@ -125,102 +139,111 @@ export class GoogleDriveService {
     };
 
     const folder = await this.drive.files.create({
-      requestBody: folderMetadata,
-      fields: 'id, name',
+      resource: folderMetadata,
+      fields: 'id, name, createdTime',
     });
 
     return {
-      id: folder.data.id!,
-      name: folder.data.name!,
+      id: folder.data.id,
+      name: folder.data.name,
+      performanceId,
+      createdAt: new Date(folder.data.createdTime).toISOString(),
     };
   }
 
-  async getRecordings(rehearsalId: string): Promise<{ id: string; name: string; mimeType: string; thumbnailLink?: string }[]> {
+  async getRecordings(rehearsalId: string): Promise<Recording[]> {
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
     const response = await this.drive.files.list({
       q: `'${rehearsalId}' in parents and mimeType contains 'video/' and trashed=false`,
-      spaces: 'drive',
-      fields: 'files(id, name, mimeType, thumbnailLink)',
+      fields: 'files(id, name, createdTime, description)',
+      orderBy: 'createdTime desc',
     });
 
-    return response.data.files?.map(file => ({
-      id: file.id!,
-      name: file.name!,
-      mimeType: file.mimeType!,
-      thumbnailLink: file.thumbnailLink || undefined,
-    })) || [];
+    return response.data.files.map((file: any) => {
+      let metadata = {};
+      try {
+        metadata = file.description ? JSON.parse(file.description) : {};
+      } catch (error) {
+        console.error('Failed to parse recording metadata:', error);
+      }
+
+      return {
+        id: file.id,
+        name: file.name,
+        rehearsalId,
+        createdAt: new Date(file.createdTime).toISOString(),
+        ...metadata,
+      };
+    });
   }
 
   async uploadRecording(
-    rehearsalId: string, 
-    file: Buffer | Blob, 
-    filename: string, 
+    rehearsalId: string,
+    file: Blob,
+    filename: string,
     metadata: Record<string, any>
   ): Promise<{ id: string; name: string }> {
-    // Upload video file
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
     const fileMetadata = {
       name: filename,
       parents: [rehearsalId],
+      description: JSON.stringify(metadata),
     };
 
     const media = {
-      mimeType: 'video/mp4',
-      body: file instanceof Buffer ? file : file,
+      mimeType: file.type,
+      body: file,
     };
 
-    const uploadedFile = await this.drive.files.create({
-      requestBody: fileMetadata,
-      media,
+    const response = await this.drive.files.create({
+      resource: fileMetadata,
+      media: media,
       fields: 'id, name',
     });
 
-    // Create metadata file
-    const metadataFilename = `${filename.split('.')[0]}_metadata.json`;
-    const metadataFileMetadata = {
-      name: metadataFilename,
-      parents: [rehearsalId],
-    };
-
-    const metadataMedia = {
-      mimeType: 'application/json',
-      body: JSON.stringify(metadata, null, 2),
-    };
-
-    await this.drive.files.create({
-      requestBody: metadataFileMetadata,
-      media: metadataMedia,
-    });
-
     return {
-      id: uploadedFile.data.id!,
-      name: uploadedFile.data.name!,
+      id: response.data.id,
+      name: response.data.name,
     };
   }
 
   async getRecordingUrl(fileId: string): Promise<string> {
-    // Get a direct download URL or streaming URL
-    const file = await this.drive.files.get({
-      fileId,
-      fields: 'webContentLink,webViewLink',
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
+    // Generate a temporary access URL for the file
+    await this.drive.permissions.create({
+      fileId: fileId,
+      requestBody: {
+        role: 'reader',
+        type: 'anyone',
+      },
     });
 
-    // Return the appropriate link for video playback
-    return file.data.webViewLink || '';
+    const response = await this.drive.files.get({
+      fileId: fileId,
+      fields: 'webContentLink',
+    });
+
+    return response.data.webContentLink;
   }
 
   async deleteFile(fileId: string): Promise<void> {
+    if (!this.initialized) {
+      throw new Error('Google Drive service not initialized');
+    }
+
     await this.drive.files.delete({
-      fileId,
+      fileId: fileId,
     });
   }
+}
 
-  // Method to refresh the token if needed
-  async refreshAccessToken(): Promise<string | null> {
-    try {
-      const { credentials } = await this.oauth2Client.refreshAccessToken();
-      return credentials.access_token || null;
-    } catch (error) {
-      console.error('Error refreshing access token:', error);
-      return null;
-    }
-  }
-} 
+export default new GoogleDriveService(); 
