@@ -81,10 +81,21 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const connectToGoogle = async () => {
     try {
       const response = await fetch('/api/auth/google/authorize');
-      const { authUrl } = await response.json();
-      window.location.href = authUrl;
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      if (!data.authUrl) {
+        throw new Error('No authorization URL returned from the server');
+      }
+      
+      // Redirect the user to the Google auth page
+      window.location.href = data.authUrl;
     } catch (error) {
       console.error('Error connecting to Google:', error);
+      setNeedsGoogleAuth(true);
       throw error;
     }
   };
@@ -200,7 +211,7 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
       
       const videoUrl = await driveService.getRecordingUrl(uploadedFile.id);
       
-      return {
+      const recording: Recording = {
         id: uploadedFile.id,
         title: metadata.title || uploadedFile.name,
         videoUrl,
@@ -214,6 +225,8 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
         sourceType: 'recorded',
         syncStatus: 'synced',
       };
+      
+      return recording;
     },
     onSuccess: (newRecording: Recording) => {
       setRecordings(prev => ({
@@ -238,9 +251,10 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
       if (!driveService) throw new Error('Google Drive service not initialized');
       
       await driveService.deleteFile(recordingId);
-      return { recordingId, rehearsalId };
+      // Return void instead of an object
     },
-    onSuccess: ({ recordingId, rehearsalId }: { recordingId: string; rehearsalId: string }) => {
+    onSuccess: (_result, variables) => {
+      const { recordingId, rehearsalId } = variables;
       setRecordings(prev => ({
         ...prev,
         [rehearsalId]: (prev[rehearsalId] || []).filter(r => r.id !== recordingId),

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Performance, Recording, Rehearsal } from '../types';
+import { Recording, Rehearsal, Performance } from '../types';
 import { 
   Plus, Edit, Play, Video, Clock, Calendar, 
   ChevronDown, ChevronRight, Upload, Camera, Link as LinkIcon,
@@ -8,33 +8,13 @@ import {
 import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
 
 interface PerformanceSelectorProps {
-  selectedPerformanceId: string;
-  performances: Performance[];
-  searchQuery?: string;
-  onSelectPerformance: (id: string) => void;
   onWatchRecording: (rehearsalId: string, recording: Recording) => void;
-  onEditRehearsal: (rehearsal: Rehearsal) => void;
-  onEditPerformance: (performance: Performance) => void;
-  onRecordRehearsal: (rehearsalId: string) => void;
-  onNewRehearsal?: (performanceId: string) => void;
-  onEditRecording?: (rehearsalId: string, recording: Recording) => void;
-  onUploadRecording?: (rehearsalId: string) => void;
-  onLinkRecording?: (rehearsalId: string) => void;
+  onSelectRehearsal?: (rehearsal: Rehearsal) => void;
 }
 
 const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
-  selectedPerformanceId,
-  performances,
-  searchQuery,
-  onSelectPerformance,
   onWatchRecording,
-  onEditRehearsal,
-  onEditPerformance,
-  onRecordRehearsal,
-  onNewRehearsal,
-  onEditRecording,
-  onUploadRecording,
-  onLinkRecording
+  onSelectRehearsal
 }) => {
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [expandedRehearsal, setExpandedRehearsal] = useState<{[key: string]: boolean}>({});
@@ -45,14 +25,18 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
   const [newPerformanceName, setNewPerformanceName] = useState('');
   const [expandedPerformanceIds, setExpandedPerformanceIds] = useState<string[]>([]);
   const [isCreatingRehearsal, setIsCreatingRehearsal] = useState(false);
+  const [selectedPerformanceId, setSelectedPerformanceId] = useState<string | null>(null);
   
   const { 
+    performances,
     rehearsals,
+    recordings,
     createPerformance, 
     createRehearsal,
     isLoading,
     needsGoogleAuth,
-    connectToGoogle
+    connectToGoogle,
+    getRecordingUrl
   } = useGoogleDrive();
 
   // Format date function
@@ -74,6 +58,15 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
       ...prev,
       [rehearsalId]: !prev[rehearsalId]
     }));
+    
+    // Find the rehearsal and call onSelectRehearsal if provided
+    if (onSelectRehearsal && selectedPerformanceId) {
+      const rehearsalList = rehearsals[selectedPerformanceId] || [];
+      const rehearsal = rehearsalList.find(r => r.id === rehearsalId);
+      if (rehearsal) {
+        onSelectRehearsal(rehearsal);
+      }
+    }
   };
   
   // Toggle recording options dropdown
@@ -95,7 +88,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         ? prev.filter(id => id !== performanceId)
         : [...prev, performanceId]
     );
-    onSelectPerformance(performanceId);
+    setSelectedPerformanceId(performanceId);
   };
 
   // Handle creating a new performance
@@ -130,14 +123,22 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         newRehearsal.date
       );
       
-      setIsCreatingRehearsal(false);
-      
       // Ensure the performance is expanded to show the new rehearsal
       if (!expandedPerformanceIds.includes(performanceId)) {
         setExpandedPerformanceIds(prev => [...prev, performanceId]);
       }
     } catch (error) {
       console.error('Error creating rehearsal:', error);
+    }
+  };
+  
+  // Handle watching a recording
+  const handleWatchRecording = async (rehearsalId: string, recording: Recording) => {
+    try {
+      const videoUrl = await getRecordingUrl(recording.id);
+      onWatchRecording(rehearsalId, { ...recording, videoUrl });
+    } catch (error) {
+      console.error('Error getting video URL:', error);
     }
   };
 
@@ -161,129 +162,158 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
 
   if (isLoading) {
     return (
-      <div className="w-full p-4 bg-white rounded-lg shadow-md">
-        <div className="flex justify-center items-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-        </div>
+      <div className="flex justify-center items-center py-8">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
   return (
-    <div className="w-full bg-white rounded-lg shadow-md overflow-hidden">
-      <div className="p-4 border-b">
-        <div className="flex justify-between items-center">
-          <h2 className="text-lg font-semibold">Performances</h2>
+    <div className="space-y-4">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex space-x-2">
           <button
-            onClick={() => setIsCreatingPerformance(true)}
-            className="text-blue-600 hover:text-blue-800"
+            onClick={() => setViewMode('list')}
+            className={`p-2 rounded-md ${viewMode === 'list' ? 'bg-blue-100 text-blue-600' : 'text-gray-500'}`}
           >
-            <PlusCircle size={20} />
+            <List size={18} />
+          </button>
+          <button
+            onClick={() => setViewMode('grid')}
+            className={`p-2 rounded-md ${viewMode === 'grid' ? 'bg-blue-100 text-blue-600' : 'text-gray-500'}`}
+          >
+            <Grid size={18} />
           </button>
         </div>
+        <button
+          onClick={() => setIsCreatingPerformance(true)}
+          className="text-blue-600 flex items-center text-sm"
+        >
+          <PlusCircle size={16} className="mr-1" />
+          New Performance
+        </button>
       </div>
-      
-      {/* New Performance Form */}
-      {isCreatingPerformance && (
-        <div className="p-4 border-b bg-gray-50">
-          <div className="flex flex-col space-y-2">
+
+      {isCreatingPerformance ? (
+        <div className="bg-white p-4 rounded-lg shadow-md mb-4">
+          <h3 className="font-medium mb-2">Create New Performance</h3>
+          <div className="flex items-center">
             <input
               type="text"
               value={newPerformanceName}
               onChange={(e) => setNewPerformanceName(e.target.value)}
+              className="flex-1 border rounded-md px-3 py-2 mr-2"
               placeholder="Performance name"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <div className="flex space-x-2">
-              <button
-                onClick={handleCreatePerformance}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-              >
-                Create
-              </button>
-              <button
-                onClick={() => {
-                  setIsCreatingPerformance(false);
-                  setNewPerformanceName('');
-                }}
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
+            <button
+              onClick={handleCreatePerformance}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+            >
+              Create
+            </button>
           </div>
         </div>
-      )}
-      
-      {/* Performances List */}
-      <div className="max-h-96 overflow-y-auto">
-        {performances.length === 0 ? (
-          <div className="p-4 text-center text-gray-500">
-            No performances yet. Create your first performance!
-          </div>
-        ) : (
-          <ul className="divide-y divide-gray-200">
-            {performances.map((performance) => (
-              <li key={performance.id} className="relative">
-                {/* Performance Item */}
-                <div 
-                  className={`flex items-center p-4 cursor-pointer hover:bg-gray-50 ${
-                    selectedPerformanceId === performance.id ? 'bg-blue-50' : ''
-                  }`}
-                  onClick={() => togglePerformance(performance.id)}
-                >
-                  <div className="mr-2">
-                    {expandedPerformanceIds.includes(performance.id) ? (
-                      <ChevronDown size={16} />
-                    ) : (
-                      <ChevronRight size={16} />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-medium">{performance.title}</h3>
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleCreateRehearsal(performance.id);
-                    }}
-                    className="text-blue-600 hover:text-blue-800"
-                  >
-                    <PlusCircle size={16} />
-                  </button>
-                </div>
-                
-                {/* Rehearsals List */}
-                {expandedPerformanceIds.includes(performance.id) && (
-                  <ul className="pl-8 bg-gray-50 divide-y divide-gray-100">
-                    {rehearsals[performance.id]?.length > 0 ? (
-                      rehearsals[performance.id].map((rehearsal) => (
-                        <li key={rehearsal.id}>
-                          <a 
-                            href={`/rehearsal/${rehearsal.id}`}
-                            className="block p-3 hover:bg-gray-100"
-                          >
-                            <div className="text-sm font-medium">{rehearsal.title}</div>
-                            <div className="text-xs text-gray-500">
-                              {rehearsal.date} • {rehearsal.location}
-                            </div>
-                          </a>
-                        </li>
-                      ))
-                    ) : (
-                      <li className="p-3 text-sm text-gray-500">
-                        No rehearsals yet
-                      </li>
-                    )}
-                  </ul>
+      ) : null}
+
+      <div className="space-y-2">
+        {performances.map((performance) => (
+          <div key={performance.id} className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div
+              className="p-4 flex items-center justify-between cursor-pointer"
+              onClick={() => togglePerformance(performance.id)}
+            >
+              <div className="flex items-center">
+                {expandedPerformanceIds.includes(performance.id) ? (
+                  <ChevronDown size={20} className="text-gray-500 mr-2" />
+                ) : (
+                  <ChevronRight size={20} className="text-gray-500 mr-2" />
                 )}
-              </li>
-            ))}
-          </ul>
-        )}
+                <h3 className="font-medium">{performance.title}</h3>
+              </div>
+            </div>
+            
+            {expandedPerformanceIds.includes(performance.id) && (
+              <div className="pl-10 pr-4 pb-4 space-y-2">
+                {/* List rehearsals for this performance */}
+                {rehearsals[performance.id]?.length > 0 ? (
+                  rehearsals[performance.id].map((rehearsal) => (
+                    <div key={rehearsal.id} className="border rounded-md overflow-hidden">
+                      <div
+                        className="p-3 bg-gray-50 flex items-center justify-between cursor-pointer"
+                        onClick={() => toggleRehearsal(rehearsal.id)}
+                      >
+                        <div className="flex items-center">
+                          {expandedRehearsal[rehearsal.id] ? (
+                            <ChevronDown size={16} className="text-gray-500 mr-2" />
+                          ) : (
+                            <ChevronRight size={16} className="text-gray-500 mr-2" />
+                          )}
+                          <span>{rehearsal.title}</span>
+                        </div>
+                        <div className="flex items-center text-sm text-gray-500">
+                          <Calendar size={14} className="mr-1" />
+                          <span>{rehearsal.date}</span>
+                        </div>
+                      </div>
+                      
+                      {expandedRehearsal[rehearsal.id] && (
+                        <div className="p-3">
+                          {recordings[rehearsal.id]?.length > 0 ? (
+                            <div className="space-y-2">
+                              {recordings[rehearsal.id].map((recording) => (
+                                <div 
+                                  key={recording.id}
+                                  className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-md cursor-pointer"
+                                  onClick={() => handleWatchRecording(rehearsal.id, recording)}
+                                >
+                                  <div className="flex items-center">
+                                    <Play size={16} className="text-blue-600 mr-2" />
+                                    <span>{recording.title}</span>
+                                  </div>
+                                  <div className="flex items-center text-xs text-gray-500">
+                                    <Clock size={12} className="mr-1" />
+                                    <span>{formatDuration(recording)}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-500">No recordings yet</p>
+                          )}
+                          
+                          <div className="mt-3 flex justify-end">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleRecordingOptions(rehearsal.id, e);
+                              }}
+                              className="p-1 text-gray-500 hover:text-blue-600"
+                            >
+                              <PlusCircle size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-gray-500">No rehearsals yet</p>
+                )}
+                
+                <button
+                  onClick={() => handleCreateRehearsal(performance.id)}
+                  className="text-sm text-blue-600 flex items-center mt-2"
+                >
+                  <Plus size={14} className="mr-1" />
+                  Add Rehearsal
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
 };
 
-export default PerformanceSelector; 
+export default PerformanceSelector;

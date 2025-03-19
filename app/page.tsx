@@ -5,11 +5,12 @@ import React, { useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { GoogleDriveProviderWithQueryClient } from '@/contexts/GoogleDriveContext';
 import SimplePerformanceSelector from '@/components/SimplePerformanceSelector';
+import PerformanceSelector from '@/components/PerformanceSelector';
 import VideoRecorder from '@/components/VideoRecorder';
 import RecordingList from '@/components/RecordingList';
 import VideoPlayer from '@/components/VideoPlayer';
 import { Recording, Rehearsal } from '@/types';
-import { Home, Plus, Video } from 'lucide-react';
+import { Home, Plus, Video, ArrowLeft } from 'lucide-react';
 
 export default function HomePage() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -34,6 +35,29 @@ export default function HomePage() {
     }
     return null;
   }
+  
+  // Handle watching a recording
+  const handleWatchRecording = (rehearsalId: string, recording: Recording) => {
+    setSelectedRecording(recording);
+  };
+  
+  // Handle selecting a rehearsal
+  const handleSelectRehearsal = (rehearsal: Rehearsal) => {
+    setSelectedRehearsal(rehearsal);
+    // Switch to recordings tab on mobile when a rehearsal is selected
+    if (window.innerWidth < 768) {
+      setActiveTab('recordings');
+    }
+  };
+  
+  // Handle back button on mobile
+  const handleBackToPerformances = () => {
+    if (selectedRecording) {
+      setSelectedRecording(null);
+    } else if (activeTab === 'recordings') {
+      setActiveTab('performances');
+    }
+  };
 
   return (
     <GoogleDriveProviderWithQueryClient>
@@ -41,22 +65,107 @@ export default function HomePage() {
         {/* Mobile header */}
         <header className="bg-white shadow-sm py-4 px-4 md:hidden sticky top-0 z-10">
           <div className="flex justify-between items-center">
-            <h1 className="text-xl font-bold">StageVault</h1>
-            <button 
-              onClick={() => setIsRecording(true)}
-              className="bg-blue-600 text-white p-2 rounded-full"
+            {activeTab === 'recordings' || selectedRecording ? (
+              <button
+                onClick={handleBackToPerformances}
+                className="flex items-center text-gray-700"
+              >
+                <ArrowLeft size={20} className="mr-1" />
+                {selectedRecording ? 'Back to Recordings' : 'Back'}
+              </button>
+            ) : (
+              <h1 className="text-xl font-bold">StageVault</h1>
+            )}
+            
+            {selectedRehearsal && !selectedRecording && !isRecording && (
+              <button 
+                onClick={() => setIsRecording(true)}
+                className="bg-blue-600 text-white p-2 rounded-full"
+              >
+                <Plus size={20} />
+              </button>
+            )}
+          </div>
+          
+          {selectedRehearsal && !selectedRecording && activeTab === 'recordings' && (
+            <div className="mt-2">
+              <h2 className="text-lg font-medium">{selectedRehearsal.title}</h2>
+              <div className="text-sm text-gray-500">
+                {selectedRehearsal.date} • {selectedRehearsal.location}
+              </div>
+            </div>
+          )}
+        </header>
+        
+        {/* Mobile tabs navigation */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-10">
+          <div className="flex justify-around">
+            <button
+              onClick={() => setActiveTab('performances')}
+              className={`flex-1 py-3 flex flex-col items-center ${
+                activeTab === 'performances' ? 'text-blue-600' : 'text-gray-500'
+              }`}
             >
-              <Plus size={20} />
+              <Home size={20} />
+              <span className="text-xs mt-1">Performances</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('recordings')}
+              className={`flex-1 py-3 flex flex-col items-center ${
+                activeTab === 'recordings' ? 'text-blue-600' : 'text-gray-500'
+              } ${!selectedRehearsal ? 'opacity-50 pointer-events-none' : ''}`}
+              disabled={!selectedRehearsal}
+            >
+              <Video size={20} />
+              <span className="text-xs mt-1">Recordings</span>
             </button>
           </div>
-        </header>
+        </div>
+        
+        {/* Mobile content */}
+        <div className="md:hidden pb-16">
+          {activeTab === 'performances' ? (
+            <div className="p-4">
+              <PerformanceSelector 
+                onWatchRecording={handleWatchRecording}
+                onSelectRehearsal={handleSelectRehearsal}
+              />
+            </div>
+          ) : selectedRehearsal ? (
+            <div className="p-4">
+              {isRecording ? (
+                <VideoRecorder 
+                  rehearsalId={selectedRehearsal.id}
+                  onRecordingComplete={() => setIsRecording(false)}
+                />
+              ) : selectedRecording ? (
+                <VideoPlayer 
+                  recording={selectedRecording}
+                  onClose={() => setSelectedRecording(null)}
+                />
+              ) : (
+                <RecordingList 
+                  rehearsalId={selectedRehearsal.id}
+                  onSelectRecording={setSelectedRecording}
+                />
+              )}
+            </div>
+          ) : (
+            <div className="p-4 text-center py-20">
+              <p className="text-gray-500">Select a rehearsal to view recordings</p>
+            </div>
+          )}
+        </div>
         
         {/* Desktop layout */}
         <div className="hidden md:flex min-h-screen">
           {/* Sidebar */}
           <div className="w-1/4 bg-white shadow-md p-6 overflow-y-auto">
             <h1 className="text-2xl font-bold mb-6">StageVault</h1>
-            <SimplePerformanceSelector />
+            <PerformanceSelector
+              onWatchRecording={handleWatchRecording}
+              onSelectRehearsal={handleSelectRehearsal}
+            />
           </div>
           
           {/* Main content */}
@@ -64,14 +173,21 @@ export default function HomePage() {
             {selectedRehearsal ? (
               <div>
                 <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-semibold">{selectedRehearsal.title}</h2>
-                  <button
-                    onClick={() => setIsRecording(true)}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center"
-                  >
-                    <Video size={16} className="mr-2" />
-                    Record Video
-                  </button>
+                  <div>
+                    <h2 className="text-xl font-semibold">{selectedRehearsal.title}</h2>
+                    <div className="text-sm text-gray-500">
+                      {selectedRehearsal.date} • {selectedRehearsal.location}
+                    </div>
+                  </div>
+                  {!isRecording && !selectedRecording && (
+                    <button
+                      onClick={() => setIsRecording(true)}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center"
+                    >
+                      <Video size={16} className="mr-2" />
+                      Record Video
+                    </button>
+                  )}
                 </div>
                 
                 {isRecording ? (
@@ -98,89 +214,6 @@ export default function HomePage() {
               </div>
             )}
           </div>
-        </div>
-        
-        {/* Mobile layout */}
-        <div className="md:hidden">
-          <div className="p-4">
-            {activeTab === 'performances' ? (
-              <SimplePerformanceSelector />
-            ) : selectedRehearsal ? (
-              isRecording ? (
-                <VideoRecorder 
-                  rehearsalId={selectedRehearsal.id}
-                  onRecordingComplete={() => setIsRecording(false)}
-                />
-              ) : selectedRecording ? (
-                <VideoPlayer 
-                  recording={selectedRecording}
-                  onClose={() => setSelectedRecording(null)}
-                />
-              ) : (
-                <div>
-                  <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-lg font-semibold">{selectedRehearsal.title}</h2>
-                    <p className="text-sm text-gray-500">{selectedRehearsal.date}</p>
-                  </div>
-                  <RecordingList 
-                    rehearsalId={selectedRehearsal.id}
-                    onSelectRecording={setSelectedRecording}
-                  />
-                </div>
-              )
-            ) : (
-              <div className="text-center py-10">
-                <p className="text-gray-500">Select a rehearsal to view recordings</p>
-              </div>
-            )}
-          </div>
-          
-          {/* Mobile navigation */}
-          <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around items-center py-3">
-            <button 
-              onClick={() => {
-                setActiveTab('performances');
-                setSelectedRecording(null);
-              }}
-              className={`flex flex-col items-center ${
-                activeTab === 'performances' ? 'text-blue-600' : 'text-gray-500'
-              }`}
-            >
-              <Home size={20} />
-              <span className="text-xs mt-1">Performances</span>
-            </button>
-            <button
-              onClick={() => {
-                if (selectedRehearsal) {
-                  setActiveTab('recordings');
-                }
-              }}
-              className={`flex flex-col items-center ${
-                activeTab === 'recordings' ? 'text-blue-600' : 'text-gray-500'
-              } ${!selectedRehearsal ? 'opacity-50' : ''}`}
-              disabled={!selectedRehearsal}
-            >
-              <Video size={20} />
-              <span className="text-xs mt-1">Recordings</span>
-            </button>
-            <button
-              onClick={() => {
-                if (selectedRehearsal) {
-                  setIsRecording(true);
-                }
-              }}
-              className="flex flex-col items-center text-gray-500"
-              disabled={!selectedRehearsal}
-            >
-              <div className="bg-blue-600 text-white rounded-full p-3 -mt-8 shadow-md">
-                <Plus size={20} />
-              </div>
-              <span className="text-xs mt-1">Record</span>
-            </button>
-          </nav>
-          
-          {/* Space for mobile navigation */}
-          <div className="h-20"></div>
         </div>
       </div>
     </GoogleDriveProviderWithQueryClient>
