@@ -7,20 +7,18 @@
 
 export interface Performance {
   id: string;
-  name: string;
   title: string;
-  defaultPerformers: string[];
+  defaultPerformers?: string[];
   rehearsals: Rehearsal[];
   createdAt: string;
 }
 
 export interface Rehearsal {
   id: string;
-  name: string;
-  performanceId: string;
   title: string;
-  location: string;
-  date: string;
+  performanceId: string;
+  location?: string;
+  date?: string;
   recordings: Recording[];
   createdAt: string;
 }
@@ -28,19 +26,15 @@ export interface Rehearsal {
 export interface Recording {
   id: string;
   title: string;
-  name?: string;
-  date: string;
-  time?: string;
-  videoUrl: string;
-  thumbnailUrl: string;
-  performers: string[];
-  notes?: string;
   rehearsalId: string;
-  tags: string[];
-  isExternalLink?: boolean;
-  externalUrl?: string;
+  date?: string;
+  time?: string;
+  performers?: string[];
+  notes?: string;
+  tags?: string[];
+  thumbnailUrl?: string;
   sourceType?: 'recorded' | 'uploaded' | 'external';
-  domain?: string;
+  externalUrl?: string;
   createdAt: string;
 }
 
@@ -72,6 +66,20 @@ export interface Collection {
   recordingIds: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+// Add these interfaces for service responses
+export interface PerformanceResponse {
+  id: string;
+  title: string;
+  createdAt: string;
+}
+
+export interface RehearsalResponse {
+  id: string;
+  title: string;
+  performanceId: string;
+  createdAt: string;
 }
 
 // Add other type definitions as needed 

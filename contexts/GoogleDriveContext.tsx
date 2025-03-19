@@ -25,12 +25,15 @@ interface GoogleDriveContextType {
   // Data queries
   performances: Performance[];
   isLoadingPerformances: boolean;
+  errorPerformances: Error | null;
 
   rehearsals: Rehearsal[];
   isLoadingRehearsals: boolean;
+  errorRehearsals: Error | null;
 
   recordings: Recording[];
   isLoadingRecordings: boolean;
+  errorRecordings: Error | null;
 
   // Current selections
   selectedPerformanceId: string | null;
@@ -41,13 +44,19 @@ interface GoogleDriveContextType {
   selectRehearsal: (id: string | null) => void;
 
   // Mutations
-  createPerformance: (name: string) => Promise<Performance>;
-  createRehearsal: (name: string) => Promise<Rehearsal>;
-  uploadRecording: (rehearsalId: string, file: Blob, metadata: Record<string, any>) => Promise<any>;
+  createPerformance: (title: string) => Promise<Performance>;
+  createRehearsal: (title: string) => Promise<Rehearsal>;
+  uploadRecording: (rehearsalId: string, file: Blob, metadata: any) => Promise<Recording>;
   getRecordingUrl: (fileId: string) => Promise<string>;
   deleteFile: (fileId: string) => Promise<void>;
 
-  refresh: () => void;
+  // State
+  isAuthenticating: boolean;
+  needsGoogleAuth: boolean;
+
+  // Actions
+  connectToGoogle: () => Promise<void>;
+  refreshData: () => void;
 }
 
 const GoogleDriveContext = createContext<GoogleDriveContextType | undefined>(undefined);
@@ -55,6 +64,7 @@ const GoogleDriveContext = createContext<GoogleDriveContextType | undefined>(und
 export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [driveService, setDriveService] = useState<typeof googleDriveService | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [needsGoogleAuth, setNeedsGoogleAuth] = useState(false);
   const { isLoaded, userId, getToken } = useAuth();
   const queryClient = useQueryClient();
@@ -67,6 +77,8 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const initializeDriveService = async () => {
       try {
+        setIsAuthenticating(true);
+
         const hasConnection = await hasGoogleConnection();
 
         if (!hasConnection) {
@@ -91,6 +103,8 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
       } catch (error) {
         console.error('Failed to initialize Google Drive service:', error);
         setNeedsGoogleAuth(true);
+      } finally {
+        setIsAuthenticating(false);
       }
     };
 
@@ -101,6 +115,7 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const {
     data: performances = [],
     isLoading: isLoadingPerformances,
+    error: errorPerformances,
     refetch: refetchPerformances
   } = useQuery({
     queryKey: ['performances'],
@@ -115,6 +130,7 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const {
     data: rehearsals = [],
     isLoading: isLoadingRehearsals,
+    error: errorRehearsals,
     refetch: refetchRehearsals
   } = useQuery({
     queryKey: ['rehearsals', selectedPerformanceId],
@@ -129,6 +145,7 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const {
     data: recordings = [],
     isLoading: isLoadingRecordings,
+    error: errorRecordings,
     refetch: refetchRecordings
   } = useQuery({
     queryKey: ['recordings', selectedRehearsalId],
@@ -141,9 +158,9 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Mutation to create a performance
   const createPerformanceMutation = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async (title: string) => {
       if (!driveService) throw new Error('Google Drive service not initialized');
-      return driveService.createPerformance(name);
+      return driveService.createPerformance(title);
     },
     onSuccess: (newPerformance) => {
       queryClient.setQueryData(['performances'],
@@ -154,11 +171,11 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Mutation to create a rehearsal
   const createRehearsalMutation = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async (title: string) => {
       if (!driveService || !selectedPerformanceId) {
         throw new Error('Performance not selected');
       }
-      return driveService.createRehearsal(selectedPerformanceId, name);
+      return driveService.createRehearsal(selectedPerformanceId, title);
     },
     onSuccess: (newRehearsal) => {
       queryClient.setQueryData(['rehearsals', selectedPerformanceId],
@@ -167,40 +184,40 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
     },
   });
 
-  // Function to upload a recording
-  const uploadRecording = async (rehearsalId: string, file: Blob, metadata: Record<string, any>) => {
-    if (!driveService) throw new Error('Google Drive service not initialized');
+  // Upload a recording
+  const uploadRecordingMutation = useMutation({
+    mutationFn: async ({ rehearsalId, file, metadata }: { rehearsalId: string, file: Blob, metadata: any }) => {
+      if (!driveService) throw new Error('Google Drive service not initialized');
 
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('rehearsalId', rehearsalId);
-    formData.append('metadata', JSON.stringify(metadata));
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('rehearsalId', rehearsalId);
+      formData.append('metadata', JSON.stringify(metadata));
 
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-    });
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message || 'Failed to upload recording');
-    }
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to upload recording');
+      }
 
-    const result = await response.json();
+      return response.json();
+    },
+    onSuccess: (result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['recordings', variables.rehearsalId] });
+    },
+  });
 
-    // Invalidate the recordings query to trigger a refetch
-    queryClient.invalidateQueries({ queryKey: ['recordings', rehearsalId] });
-
-    return result;
-  };
-
-  // Function to get recording URL
+  // Get recording URL
   const getRecordingUrl = async (fileId: string) => {
     if (!driveService) throw new Error('Google Drive service not initialized');
     return driveService.getRecordingUrl(fileId);
   };
 
-  // Mutation to delete a file
+  // Delete a file
   const deleteFileMutation = useMutation({
     mutationFn: async (fileId: string) => {
       if (!driveService) throw new Error('Google Drive service not initialized');
@@ -208,17 +225,34 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
       await driveService.deleteFile(fileId);
     },
     onSuccess: (_, fileId) => {
-      // If it's a recording, update the recordings list
+      // If deleting a recording, refresh recordings
       if (selectedRehearsalId) {
         queryClient.setQueryData(['recordings', selectedRehearsalId],
           (old: Recording[] = []) => old.filter(recording => recording.id !== fileId)
         );
       }
+      // If deleting a rehearsal, refresh rehearsals
+      else if (selectedPerformanceId) {
+        queryClient.setQueryData(['rehearsals', selectedPerformanceId],
+          (old: Rehearsal[] = []) => old.filter(rehearsal => rehearsal.id !== fileId)
+        );
+      }
+      // If deleting a performance, refresh performances
+      else {
+        queryClient.setQueryData(['performances'],
+          (old: Performance[] = []) => old.filter(performance => performance.id !== fileId)
+        );
+      }
     },
   });
 
-  // Function to refresh all data
-  const refresh = () => {
+  // Connect to Google (initiate OAuth flow)
+  const connectToGoogle = async () => {
+    window.location.href = '/api/auth/google';
+  };
+
+  // Refresh all data
+  const refreshData = () => {
     refetchPerformances();
     if (selectedPerformanceId) refetchRehearsals();
     if (selectedRehearsalId) refetchRecordings();
@@ -237,12 +271,15 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // Data
     performances,
     isLoadingPerformances,
+    errorPerformances,
 
     rehearsals,
     isLoadingRehearsals,
+    errorRehearsals,
 
     recordings,
     isLoadingRecordings,
+    errorRecordings,
 
     // Current selections
     selectedPerformanceId,
@@ -255,11 +292,18 @@ export const GoogleDriveProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // Mutations
     createPerformance: createPerformanceMutation.mutateAsync,
     createRehearsal: createRehearsalMutation.mutateAsync,
-    uploadRecording,
+    uploadRecording: (rehearsalId: string, file: Blob, metadata: any) =>
+      uploadRecordingMutation.mutateAsync({ rehearsalId, file, metadata }),
     getRecordingUrl,
     deleteFile: deleteFileMutation.mutateAsync,
 
-    refresh,
+    // State
+    isAuthenticating,
+    needsGoogleAuth,
+
+    // Actions
+    connectToGoogle,
+    refreshData,
   };
 
   return (

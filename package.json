@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "lint": "next lint",
+    "cleanup": "bash ./scripts/cleanup.sh"
   },
   "dependencies": {
     "@clerk/nextjs": "^5.0.0-beta.46",

@@ -80,8 +80,10 @@ class GoogleDriveService {
 
     return response.data.files.map((file: any) => ({
       id: file.id,
-      name: file.name,
+      title: file.name,
       createdAt: new Date(file.createdTime).toISOString(),
+      defaultPerformers: [],
+      rehearsals: []
     }));
   }
 
@@ -103,9 +105,11 @@ class GoogleDriveService {
 
     return {
       id: folder.data.id,
-      name: folder.data.name,
+      title: folder.data.name,
       createdAt: new Date(folder.data.createdTime).toISOString(),
-    };
+      defaultPerformers: [],
+      rehearsals: []
+    } as Performance;
   }
 
   async getRehearsals(performanceId: string): Promise<Rehearsal[]> {
@@ -121,9 +125,12 @@ class GoogleDriveService {
 
     return response.data.files.map((file: any) => ({
       id: file.id,
-      name: file.name,
+      title: file.name,
       performanceId,
       createdAt: new Date(file.createdTime).toISOString(),
+      location: "",
+      date: "",
+      recordings: []
     }));
   }
 
@@ -145,10 +152,13 @@ class GoogleDriveService {
 
     return {
       id: folder.data.id,
-      name: folder.data.name,
+      title: folder.data.name,
       performanceId,
       createdAt: new Date(folder.data.createdTime).toISOString(),
-    };
+      location: "",
+      date: "",
+      recordings: []
+    } as Rehearsal;
   }
 
   async getRecordings(rehearsalId: string): Promise<Recording[]> {
@@ -246,4 +256,4 @@ class GoogleDriveService {
   }
 }
 
-export default new GoogleDriveService(); 
+export default new GoogleDriveService();
