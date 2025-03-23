@@ -5,7 +5,8 @@ import { saveGoogleToken } from '@/lib/clerkAuth';
 
 export async function POST(request: NextRequest) {
   try {
-    const { userId } = auth();
+    const authResult = await auth();
+    const userId = authResult?.userId;
 
     if (!userId) {
       return NextResponse.json(

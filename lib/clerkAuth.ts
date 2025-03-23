@@ -1,10 +1,86 @@
 // lib/clerkAuth.ts
-import { clerkClient } from '@clerk/backend';
+
 import { auth } from '@clerk/nextjs/server';
 import { randomBytes } from 'crypto';
-import { User, Session, ExternalAccount as ClerkExternalAccount } from '@clerk/backend/dist/types/api';
-import { Clerk } from '@clerk/nextjs/server';
 
+// Create a custom admin API client for Clerk operations
+const clerk = {
+  users: {
+    getUserList: async (params: any) => {
+      // Implementation using Clerk API directly
+      const response = await fetch('https://api.clerk.dev/v1/users', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.json();
+    },
+    getUser: async (userId: string) => {
+      // Implementation using Clerk API directly
+      const response = await fetch(`https://api.clerk.dev/v1/users/${userId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.json();
+    },
+    updateUser: async (userId: string, data: any) => {
+      // Implementation using Clerk API directly
+      const response = await fetch(`https://api.clerk.dev/v1/users/${userId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+      return response.json();
+    },
+    createUser: async (data: any) => {
+      // Implementation using Clerk API directly
+      const response = await fetch('https://api.clerk.dev/v1/users', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+      return response.json();
+    }
+  },
+  sessions: {
+    getSessionList: async (params: any) => {
+      // Implementation using Clerk API directly
+      const response = await fetch('https://api.clerk.dev/v1/sessions', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.json();
+    },
+    createSession: async (data: any) => {
+      // Implementation using Clerk API directly
+      const response = await fetch('https://api.clerk.dev/v1/sessions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.CLERK_SECRET_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+      return response.json();
+    }
+  }
+};
+
+// Define simplified interfaces (instead of importing Clerk's internal or deprecated ones)
 interface GoogleUserInfo {
   email: string;
   firstName: string;
@@ -18,7 +94,30 @@ interface ExternalAccount {
   identificationId: string;
 }
 
-// A simple local storage manager for tokens
+interface ClerkUser {
+  id: string;
+  externalAccounts: ExternalAccount[];
+  privateMetadata: Record<string, unknown>;
+  publicMetadata?: Record<string, unknown>;
+  // Add any other fields if necessary
+}
+
+interface ClerkSession {
+  id: string;
+  userId: string;
+  expireAt?: Date;
+  // Add any other fields if necessary
+}
+
+// If you need an OAuth token interface:
+interface OauthAccessToken {
+  provider: string;
+  token: string;
+  expiresAt?: Date;
+  refreshToken?: string;
+}
+
+// A simple local storage manager for tokens (used only in a browser context)
 const tokenStorage = {
   setToken: (userId: string, token: string) => {
     try {
@@ -29,7 +128,7 @@ const tokenStorage = {
       console.error('Error saving token to local storage:', error);
     }
   },
-  
+
   getToken: (userId: string): string | null => {
     try {
       if (typeof window !== 'undefined') {
@@ -39,65 +138,69 @@ const tokenStorage = {
       console.error('Error getting token from local storage:', error);
     }
     return null;
-  }
+  },
 };
 
+// Create or update a Clerk user via email/Google OAuth
 export async function createClerkUser(userInfo: GoogleUserInfo) {
   const { email, firstName, lastName, googleId, profileImageUrl } = userInfo;
-  
+
   try {
     // Check if user already exists with this email
-    const existingUsers = await clerkClient.users.getUserList({
+    const existingUsers = await clerk.users.getUserList({
       emailAddress: [email],
     });
 
-    let user;
-    
-    if (existingUsers.data.length > 0) {
+    let user: ClerkUser;
+
+    if (existingUsers.length > 0) {
       // User exists, update their Google OAuth credentials if needed
-      user = existingUsers.data[0];
-      
+      user = existingUsers[0] as ClerkUser;
+
       // Check if Google OAuth is already connected
       const hasGoogleAccount = user.externalAccounts.some(
-        (account: ExternalAccount) => account.provider === 'google' && account.identificationId === googleId
+        (account: ExternalAccount) =>
+          account.provider === 'google' && account.identificationId === googleId
       );
-      
+
       if (!hasGoogleAccount) {
         // Connect Google account to existing user
-        await clerkClient.users.updateUser(user.id, {
+        await clerk.users.updateUser(user.id, {
           externalAccounts: [
             ...user.externalAccounts,
             {
               provider: 'google',
-              providerUserId: googleId
-            }
-          ]
+              providerUserId: googleId,
+            },
+          ],
         });
       }
     } else {
       // Create a new user
-      user = await clerkClient.users.createUser({
+      user = (await clerk.users.createUser({
         emailAddress: [email],
         firstName,
         lastName,
         publicMetadata: {
           googleId,
-          profileImageUrl
-        }
-      });
+          profileImageUrl,
+        },
+      })) as ClerkUser;
     }
 
-    // Create a new session token
+    // Create a new random token (not an official Clerk session token; just an example)
     const sessionToken = randomBytes(32).toString('hex');
-    const session = await clerkClient.sessions.createSession({
+
+    // Create a Clerk session (if you want Clerk to track user sessions)
+    const session = (await clerk.sessions.createSession({
       userId: user.id,
-      expireAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-    });
+      expireAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days from now
+    })) as ClerkSession;
 
     return {
       userId: user.id,
       sessionToken,
-      sessionId: session.id
+      sessionId: session.id,
     };
   } catch (error) {
     console.error('Error creating or updating Clerk user:', error);
@@ -105,21 +208,25 @@ export async function createClerkUser(userInfo: GoogleUserInfo) {
   }
 }
 
+// Validate a session by sessionId or custom token
 export async function validateSession(sessionToken: string) {
   try {
-    const sessions = await clerkClient.sessions.getSessionList({
+    const sessions = await clerk.sessions.getSessionList({
       status: 'active',
     });
-    
-    const session = sessions.data.find((s: Session) => s.id === sessionToken);
-    
+
+    // In newer Clerk versions, getSessionList returns an array directly. 
+    // If older versions returned { data: [...] }, adjust as needed:
+    const sessionList = Array.isArray(sessions) ? sessions : sessions || [];
+
+    const session = sessionList.find((s: any) => s.id === sessionToken);
     if (!session) {
       return null;
     }
-    
+
     return {
       userId: session.userId,
-      sessionId: session.id
+      sessionId: session.id,
     };
   } catch (error) {
     console.error('Error validating session:', error);
@@ -127,23 +234,27 @@ export async function validateSession(sessionToken: string) {
   }
 }
 
+// Save Google refresh token for user (stores in localStorage and privateMetadata if possible)
 export async function saveGoogleToken(userId: string, refreshToken: string) {
   try {
-    // Store token in local storage (for client-side access)
+    // Store token in local storage (for client-side)
     tokenStorage.setToken(userId, refreshToken);
-    
-    // Also try to store in Clerk's private metadata if secret key is available
+
+    // Also attempt storing in Clerk private metadata
     try {
-      await clerkClient.users.updateUser(userId, {
+      await clerk.users.updateUser(userId, {
         privateMetadata: {
           googleRefreshToken: refreshToken,
           googleTokenUpdatedAt: new Date().toISOString(),
         },
       });
     } catch (error) {
-      console.warn('Could not update Clerk user metadata, continuing with local storage only:', error);
+      console.warn(
+        'Could not update Clerk user metadata, continuing with local storage only:',
+        error
+      );
     }
-    
+
     return true;
   } catch (error) {
     console.error('Error saving Google token:', error);
@@ -151,35 +262,40 @@ export async function saveGoogleToken(userId: string, refreshToken: string) {
   }
 }
 
-export async function getGoogleRefreshToken(userId: string): Promise<string | null> {
+// Retrieve Google refresh token from localStorage or Clerk privateMetadata
+export async function getGoogleRefreshToken(
+  userId: string
+): Promise<string | null> {
   try {
-    // First try to get from local storage - this doesn't require the Clerk secret key
+    // Check local storage first
     const localToken = tokenStorage.getToken(userId);
     if (localToken) {
-      console.log("Found refresh token in local storage");
+      console.log('Found refresh token in local storage');
       return localToken;
     }
-    
-    // If not in local storage, try to get from Clerk if possible
+
+    // If not in local storage, try Clerk
     try {
-      const user = await clerkClient.users.getUser(userId);
-      
-      // Check for Google OAuth token in user's private metadata
-      const privateMetadata = user.privateMetadata as any;
-      const refreshToken = privateMetadata?.googleRefreshToken || 
-                          privateMetadata?.google_refresh_token;
-      
+      const user = (await clerk.users.getUser(userId)) as ClerkUser;
+      const privateMetadata = user.privateMetadata || {};
+      const refreshToken =
+        (privateMetadata.googleRefreshToken as string) ||
+        (privateMetadata.google_refresh_token as string);
+
       if (refreshToken) {
-        console.log("Found refresh token in user metadata");
+        console.log('Found refresh token in user metadata');
         // Cache it in local storage for next time
         tokenStorage.setToken(userId, refreshToken);
         return refreshToken;
       }
     } catch (clerkError) {
-      console.warn('Could not get user from Clerk API, continuing with local storage only:', clerkError);
+      console.warn(
+        'Could not get user from Clerk API, continuing with local storage only:',
+        clerkError
+      );
     }
-    
-    console.log("No Google refresh token found for user");
+
+    console.log('No Google refresh token found for user');
     return null;
   } catch (error) {
     console.error('Error getting Google token:', error);
@@ -187,24 +303,25 @@ export async function getGoogleRefreshToken(userId: string): Promise<string | nu
   }
 }
 
-// Check if token exists
+// Quick helper to check if a user's Google refresh token exists
 export async function checkGoogleRefreshToken(userId: string): Promise<boolean> {
   const token = await getGoogleRefreshToken(userId);
   return !!token;
 }
 
-// Remove token
+// Remove token from Clerk's private metadata (and optionally from localStorage)
 export async function removeGoogleRefreshToken(userId: string): Promise<boolean> {
   try {
-    const user = await clerkClient.users.getUser(userId);
-    const privateMetadata = {...(user.privateMetadata as any)};
-    
+    const user = (await clerk.users.getUser(userId)) as ClerkUser;
+    const privateMetadata = { ...user.privateMetadata };
+
     if (privateMetadata.googleRefreshToken) {
       delete privateMetadata.googleRefreshToken;
-      await clerkClient.users.updateUser(userId, {
+      await clerk.users.updateUser(userId, {
         privateMetadata,
       });
     }
+
     return true;
   } catch (error) {
     console.error('Error removing Google refresh token:', error);
@@ -212,8 +329,10 @@ export async function removeGoogleRefreshToken(userId: string): Promise<boolean>
   }
 }
 
-// Add this function to handle Google access token retrieval
-async function getGoogleAccessToken(refreshToken: string): Promise<{ access_token: string }> {
+// Get a new access token from Google using a refresh token
+async function getGoogleAccessToken(
+  refreshToken: string
+): Promise<{ access_token: string }> {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: {
@@ -234,37 +353,38 @@ async function getGoogleAccessToken(refreshToken: string): Promise<{ access_toke
   return response.json();
 }
 
+// Uploads both a video blob (and optionally a thumbnail) to Google Drive in a structured folder
 export async function uploadToGoogleDrive(
   refreshToken: string,
   videoBlob: Blob,
   thumbnailBlob: Blob | null,
-  metadata: any
+  metadata: Record<string, any>
 ) {
   try {
     // Get an access token using the refresh token
     const { access_token } = await getGoogleAccessToken(refreshToken);
-    
     if (!access_token) {
       throw new Error('Failed to get Google access token');
     }
-    
+
     console.log('Got access token, uploading to Google Drive...');
-    
-    // Create a root folder for the app if it doesn't exist
+
+    // Ensure the app's root folder
     const rootFolderId = await ensureRootFolder(access_token);
-    
-    // Create a folder for this performance if needed
+
+    // Ensure a subfolder for this specific performance
     const performanceFolderId = await ensurePerformanceFolder(
-      access_token, 
-      rootFolderId, 
+      access_token,
+      rootFolderId,
       metadata.performanceId,
       metadata.performanceTitle || 'Untitled Performance'
     );
-    
-    // Prepare file name with basic metadata
-    const fileName = `${metadata.title || 'Recording'} - ${metadata.time || new Date().toLocaleTimeString()}`;
-    
-    // Upload the video file
+
+    // Prepare file name
+    const fileName = `${metadata.title || 'Recording'} - ${metadata.time || new Date().toLocaleTimeString()
+      }`;
+
+    // Upload the video
     const videoFileId = await uploadFile(
       access_token,
       videoBlob,
@@ -272,8 +392,8 @@ export async function uploadToGoogleDrive(
       fileName,
       'video/mp4'
     );
-    
-    // Upload the thumbnail if available
+
+    // Upload the thumbnail
     let thumbnailId = null;
     if (thumbnailBlob) {
       thumbnailId = await uploadFile(
@@ -284,17 +404,17 @@ export async function uploadToGoogleDrive(
         'image/jpeg'
       );
     }
-    
-    // Add metadata as properties to the file
+
+    // Add custom metadata to the uploaded video
     if (videoFileId) {
       await addMetadataToFile(access_token, videoFileId, metadata);
     }
-    
+
     return {
       success: true,
       fileId: videoFileId,
       fileName: fileName,
-      thumbnailId: thumbnailId
+      thumbnailId: thumbnailId,
     };
   } catch (error) {
     console.error('Error uploading to Google Drive:', error);
@@ -302,7 +422,7 @@ export async function uploadToGoogleDrive(
   }
 }
 
-// Helper function to upload a file to Google Drive
+// Helper: upload a single file to Google Drive (multipart form request)
 async function uploadFile(
   accessToken: string,
   blob: Blob,
@@ -311,89 +431,86 @@ async function uploadFile(
   mimeType: string
 ): Promise<string> {
   const metadata = {
-    name: name,
-    mimeType: mimeType,
-    parents: [folderId]
+    name,
+    mimeType,
+    parents: [folderId],
   };
-  
-  // Create a multi-part request for both metadata and file content
+
   const form = new FormData();
   form.append(
     'metadata',
     new Blob([JSON.stringify(metadata)], { type: 'application/json' })
   );
   form.append('file', blob);
-  
+
   const response = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${accessToken}`
+        Authorization: `Bearer ${accessToken}`,
       },
-      body: form
+      body: form,
     }
   );
-  
+
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Failed to upload file: ${response.status} ${errorText}`);
   }
-  
+
   const data = await response.json();
   return data.id;
 }
 
-// Helper to ensure a root folder exists for all the app's files
+// Ensure a root folder (e.g. "StageVault Recordings") exists in Drive, or create if missing
 async function ensureRootFolder(accessToken: string): Promise<string> {
   const appFolderName = 'StageVault Recordings';
-  
-  // Check if the folder already exists
+
+  // Search for the folder
   const searchResponse = await fetch(
     `https://www.googleapis.com/drive/v3/files?q=name='${appFolderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     {
       headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+        Authorization: `Bearer ${accessToken}`,
+      },
     }
   );
-  
+
   if (!searchResponse.ok) {
     throw new Error(`Failed to search for root folder: ${searchResponse.status}`);
   }
-  
+
   const searchData = await searchResponse.json();
-  
-  // If folder exists, return its ID
   if (searchData.files && searchData.files.length > 0) {
     return searchData.files[0].id;
   }
-  
-  // If folder doesn't exist, create it
+
+  // If not found, create the folder
   const createResponse = await fetch(
     'https://www.googleapis.com/drive/v3/files',
     {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         name: appFolderName,
-        mimeType: 'application/vnd.google-apps.folder'
-      })
+        mimeType: 'application/vnd.google-apps.folder',
+      }),
     }
   );
-  
+
   if (!createResponse.ok) {
     throw new Error(`Failed to create root folder: ${createResponse.status}`);
   }
-  
+
   const createData = await createResponse.json();
   return createData.id;
 }
 
-// Helper to ensure a folder exists for a specific performance
+// Ensure a folder for a given performance inside the root folder
 async function ensurePerformanceFolder(
   accessToken: string,
   parentId: string,
@@ -401,63 +518,59 @@ async function ensurePerformanceFolder(
   performanceTitle: string
 ): Promise<string> {
   const folderName = `${performanceTitle} (${performanceId})`;
-  
-  // Check if the folder already exists
+
+  // Search for the folder
   const searchResponse = await fetch(
     `https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     {
       headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+        Authorization: `Bearer ${accessToken}`,
+      },
     }
   );
-  
+
   if (!searchResponse.ok) {
     throw new Error(`Failed to search for performance folder: ${searchResponse.status}`);
   }
-  
+
   const searchData = await searchResponse.json();
-  
-  // If folder exists, return its ID
   if (searchData.files && searchData.files.length > 0) {
     return searchData.files[0].id;
   }
-  
-  // If folder doesn't exist, create it
+
+  // If not found, create it
   const createResponse = await fetch(
     'https://www.googleapis.com/drive/v3/files',
     {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         name: folderName,
         mimeType: 'application/vnd.google-apps.folder',
-        parents: [parentId]
-      })
+        parents: [parentId],
+      }),
     }
   );
-  
+
   if (!createResponse.ok) {
     throw new Error(`Failed to create performance folder: ${createResponse.status}`);
   }
-  
+
   const createData = await createResponse.json();
   return createData.id;
 }
 
-// Helper to add metadata as properties to a file
+// Attach custom metadata (key/value) to a file in Drive
 async function addMetadataToFile(
   accessToken: string,
   fileId: string,
-  metadata: any
+  metadata: Record<string, any>
 ): Promise<void> {
-  // Convert metadata to properties (strings only)
   const properties: Record<string, string> = {};
-  
-  // Add each metadata field as a property, converting non-strings to strings
+
   for (const [key, value] of Object.entries(metadata)) {
     if (value !== undefined && value !== null) {
       if (typeof value === 'object') {
@@ -467,23 +580,33 @@ async function addMetadataToFile(
       }
     }
   }
-  
-  // Update the file with the properties
+
   const response = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}`,
     {
       method: 'PATCH',
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ properties })
+      body: JSON.stringify({ properties }),
     }
   );
-  
+
   if (!response.ok) {
     const errorText = await response.text();
     console.error(`Failed to add metadata to file: ${response.status} ${errorText}`);
-    // Continue even if metadata addition fails - the file is already uploaded
+    // The file upload was successful, so we won't throw here unless you specifically want to fail
+  }
+}
+
+// Retrieve a user's connected OAuth providers
+export async function getUserOAuthTokens(userId: string): Promise<ExternalAccount[]> {
+  try {
+    const user = (await clerk.users.getUser(userId)) as ClerkUser;
+    return user.externalAccounts;
+  } catch (error) {
+    console.error('Error getting OAuth tokens:', error);
+    return [];
   }
 }

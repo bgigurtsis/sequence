@@ -204,16 +204,22 @@ export const VideoRecorder: React.FC<VideoRecorderProps> = ({
       };
 
       // Upload directly to Google Drive
-      const recording = await uploadRecording(
-        rehearsalId,
-        videoBlob,
-        recordingMetadata
-      );
+      if (uploadRecording) {
+        const recording = await uploadRecording(
+          rehearsalId,
+          videoBlob,
+          recordingMetadata
+        );
 
-      // Call the completion handler
-      onRecordingComplete(recording);
-      setIsProcessing(false);
-      setRecordingTime(0);
+        // Call the completion handler
+        onRecordingComplete(recording);
+        setIsProcessing(false);
+        setRecordingTime(0);
+      } else {
+        console.error('uploadRecording is undefined');
+        setError('Failed to save recording. Please try again.');
+        setIsProcessing(false);
+      }
     } catch (error) {
       console.error('Error saving recording:', error);
       setError('Failed to save recording. Please try again.');

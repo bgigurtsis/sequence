@@ -5,19 +5,19 @@ import React, { useEffect } from 'react';
 import { useUser } from '@clerk/nextjs';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
-import { 
-  Info, 
-  CheckCircle, 
-  XCircle, 
-  AlertTriangle, 
+import {
+  Info,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
   Loader2
 } from 'lucide-react';
 
 export default function GoogleDriveSettings() {
   const { user, isSignedIn, isLoaded } = useUser();
-  const { 
-    isConnected, 
-    isLoading, 
+  const {
+    isConnected,
+    isLoading,
     error,
     connectGoogleDrive,
     disconnectGoogleDrive,
@@ -25,10 +25,10 @@ export default function GoogleDriveSettings() {
   } = useGoogleDrive();
   const router = useRouter();
   const searchParams = useSearchParams();
-  
+
   const urlSuccess = searchParams?.get('success');
   const urlError = searchParams?.get('error');
-  
+
   useEffect(() => {
     if (isLoaded && !isSignedIn) {
       router.push('/signin');
@@ -53,14 +53,14 @@ export default function GoogleDriveSettings() {
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-3xl mx-auto bg-white rounded-lg shadow p-6">
         <h1 className="text-2xl font-bold mb-6">Google Drive Settings</h1>
-        
+
         {urlSuccess === 'connected' && (
           <div className="mb-4 p-3 bg-green-100 text-green-800 rounded-md flex items-start">
             <CheckCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
             <p>Google Drive connected successfully! Your recordings will now be saved to your Google Drive.</p>
           </div>
         )}
-        
+
         {urlError && (
           <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md flex items-start">
             <XCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
@@ -75,14 +75,16 @@ export default function GoogleDriveSettings() {
             </div>
           </div>
         )}
-        
+
         {error && (
           <div className="mb-4 p-3 bg-red-100 text-red-800 rounded-md flex items-start">
             <AlertTriangle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
-            <p>{error}</p>
+            <p className="text-red-500">
+              {error ? (error as Error).message : 'An error occurred'}
+            </p>
           </div>
         )}
-        
+
         <div className="mb-6 p-4 bg-blue-50 rounded-md">
           <div className="flex items-start">
             <Info className="h-5 w-5 mr-2 mt-0.5 text-blue-500 flex-shrink-0" />
@@ -96,7 +98,7 @@ export default function GoogleDriveSettings() {
             </div>
           </div>
         </div>
-        
+
         {isConnected ? (
           <div className="mb-6">
             <div className="flex items-center mb-4">
@@ -132,7 +134,7 @@ export default function GoogleDriveSettings() {
             </button>
           </div>
         )}
-        
+
         <div className="mt-4 text-sm text-gray-500">
           <h3 className="font-medium mb-2">Why connect Google Drive?</h3>
           <ul className="list-disc pl-5 space-y-1">

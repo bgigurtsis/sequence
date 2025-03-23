@@ -226,7 +226,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ recording, onClose }) => {
       >
         {/* Top bar */}
         <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center">
-          <h3 className="text-white font-medium truncate pr-8">{recording.title || recording.name}</h3>
+          <h3 className="text-white font-medium truncate pr-8">
+            {recording.title || (recording as any).name || 'Untitled Recording'}
+          </h3>
           <button
             onClick={onClose}
             className="text-white bg-black/50 rounded-full p-1"

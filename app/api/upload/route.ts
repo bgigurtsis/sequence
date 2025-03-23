@@ -7,12 +7,11 @@ import { getGoogleTokens } from '@/lib/auth';
 export async function POST(req: NextRequest) {
   try {
     // 1. Authentication check
-    const { userId } = auth();
+    const authResult = await auth();
+    const userId = authResult?.userId;
+
     if (!userId) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     // 2. Get form data

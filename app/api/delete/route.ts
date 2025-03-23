@@ -6,7 +6,7 @@ import googleDriveService from '@/lib/googleDriveService';
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { userId } = auth();
+    const { userId } = await auth();
 
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

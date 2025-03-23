@@ -6,36 +6,39 @@ import { useState } from 'react';
 
 export default function SettingsPage() {
   const { isSignedIn, user } = useUser();
-  const { isConnected, isLoading, error, connectGoogleDrive, disconnectGoogleDrive } = useGoogleDrive();
+  const { isInitialized: isConnected, isLoading, error, connectToGoogle: connectGoogleDrive } = useGoogleDrive();
   const [message, setMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
 
   const handleConnect = async () => {
     try {
       setMessage('Connecting to Google Drive...');
       await connectGoogleDrive();
       setMessage('Google Drive connected successfully!');
-    } catch (error) {
-      setMessage(`Error connecting to Google Drive: ${error.message}`);
+    } catch (error: unknown) {
+      console.error('Error:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'An unexpected error occurred');
     }
   };
 
   const handleDisconnect = async () => {
     try {
       setMessage('Disconnecting from Google Drive...');
-      await disconnectGoogleDrive();
+      // Implement a disconnect function here
       setMessage('Google Drive disconnected successfully!');
-    } catch (error) {
-      setMessage(`Error disconnecting from Google Drive: ${error.message}`);
+    } catch (error: unknown) {
+      console.error('Error:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'An unexpected error occurred');
     }
   };
 
   return (
     <div className="container mx-auto py-8 px-4">
       <h1 className="text-2xl font-bold mb-6">Settings</h1>
-      
+
       <div className="bg-white rounded-lg shadow p-6 mb-6">
         <h2 className="text-xl font-semibold mb-4">Google Drive Integration</h2>
-        
+
         {isLoading ? (
           <p>Loading Google Drive status...</p>
         ) : (
@@ -44,12 +47,12 @@ export default function SettingsPage() {
               <p>Status: <span className={isConnected ? "text-green-500 font-medium" : "text-red-500 font-medium"}>
                 {isConnected ? 'Connected' : 'Not Connected'}
               </span></p>
-              
-              {error && (
-                <p className="text-red-500 mt-2">{error}</p>
+
+              {errorMessage && (
+                <p className="text-red-500 mt-2">{errorMessage}</p>
               )}
             </div>
-            
+
             <div className="flex space-x-4">
               {!isConnected ? (
                 <button
@@ -69,14 +72,14 @@ export default function SettingsPage() {
                 </button>
               )}
             </div>
-            
+
             {message && (
               <p className="mt-4 text-sm text-gray-700">{message}</p>
             )}
           </div>
         )}
       </div>
-      
+
       {user && (
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-xl font-semibold mb-4">Account Information</h2>

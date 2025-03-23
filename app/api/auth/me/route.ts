@@ -9,18 +9,16 @@ import { checkGoogleDriveConnection } from '@/lib/googleDrive';
  */
 export async function GET() {
   try {
-    const { userId } = auth();
-    
+    const authResult = await auth();
+    const userId = authResult?.userId;
+
     if (!userId) {
-      return NextResponse.json(
-        { connected: false, message: 'User is not authenticated' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     // Get the user's Google refresh token
     const refreshToken = await getGoogleRefreshToken(userId);
-    
+
     if (!refreshToken) {
       return NextResponse.json({
         connected: false,
@@ -48,8 +46,8 @@ export async function GET() {
   } catch (error: any) {
     console.error('Error in google-status endpoint:', error);
     return NextResponse.json(
-      { 
-        connected: false, 
+      {
+        connected: false,
         message: error.message || 'Internal server error',
         error: process.env.NODE_ENV === 'development' ? error.stack : undefined
       },

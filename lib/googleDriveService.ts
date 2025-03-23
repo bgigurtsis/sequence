@@ -134,7 +134,7 @@ class GoogleDriveService {
     }));
   }
 
-  async createRehearsal(performanceId: string, name: string): Promise<Rehearsal> {
+  async createRehearsal(performanceId: string, name: string, location: string, date: string): Promise<Rehearsal> {
     if (!this.initialized) {
       throw new Error('Google Drive service not initialized');
     }
@@ -155,8 +155,8 @@ class GoogleDriveService {
       title: folder.data.name,
       performanceId,
       createdAt: new Date(folder.data.createdTime).toISOString(),
-      location: "",
-      date: "",
+      location: location,
+      date: date,
       recordings: []
     } as Rehearsal;
   }

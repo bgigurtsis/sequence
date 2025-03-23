@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Recording, Rehearsal, Performance } from '../types';
-import { 
-  Plus, Edit, Play, Video, Clock, Calendar, 
+import {
+  Plus, Edit, Play, Video, Clock, Calendar,
   ChevronDown, ChevronRight, Upload, Camera, Link as LinkIcon,
   List, Grid, MoreVertical, PlusCircle
 } from 'lucide-react';
@@ -17,7 +17,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
   onSelectRehearsal
 }) => {
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
-  const [expandedRehearsal, setExpandedRehearsal] = useState<{[key: string]: boolean}>({});
+  const [expandedRehearsal, setExpandedRehearsal] = useState<{ [key: string]: boolean }>({});
   const [showRecordingOptions, setShowRecordingOptions] = useState<string | null>(null);
   const recordingOptionsRef = useRef<HTMLDivElement>(null);
   const [dropdownAnchorRect, setDropdownAnchorRect] = useState<DOMRect | null>(null);
@@ -26,12 +26,12 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
   const [expandedPerformanceIds, setExpandedPerformanceIds] = useState<string[]>([]);
   const [isCreatingRehearsal, setIsCreatingRehearsal] = useState(false);
   const [selectedPerformanceId, setSelectedPerformanceId] = useState<string | null>(null);
-  
-  const { 
+
+  const {
     performances,
     rehearsals,
     recordings,
-    createPerformance, 
+    createPerformance,
     createRehearsal,
     isLoading,
     needsGoogleAuth,
@@ -45,45 +45,45 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
     const [day, month, year] = dateString.split('-');
     return `${day}/${month}/${year}`;
   };
-  
+
   // Mock duration formatter
   const formatDuration = (recording: Recording) => {
     // This would ideally come from the actual recording metadata
     return '2:34';
   };
-  
+
   // Toggle rehearsal expanded state
   const toggleRehearsal = (rehearsalId: string) => {
     setExpandedRehearsal(prev => ({
       ...prev,
       [rehearsalId]: !prev[rehearsalId]
     }));
-    
+
     // Find the rehearsal and call onSelectRehearsal if provided
     if (onSelectRehearsal && selectedPerformanceId) {
       const rehearsalList = rehearsals[selectedPerformanceId] || [];
-      const rehearsal = rehearsalList.find(r => r.id === rehearsalId);
+      const rehearsal = rehearsalList.find((r: Rehearsal) => r.id === rehearsalId);
       if (rehearsal) {
         onSelectRehearsal(rehearsal);
       }
     }
   };
-  
+
   // Toggle recording options dropdown
   const toggleRecordingOptions = (rehearsalId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    
+
     // Save the button's rect for positioning the dropdown
     const buttonRect = e.currentTarget.getBoundingClientRect();
     setDropdownAnchorRect(buttonRect);
-    
+
     // Toggle the dropdown visibility
     setShowRecordingOptions(prev => prev === rehearsalId ? null : rehearsalId);
   };
 
   // Toggle performance expansion
   const togglePerformance = (performanceId: string) => {
-    setExpandedPerformanceIds(prev => 
+    setExpandedPerformanceIds(prev =>
       prev.includes(performanceId)
         ? prev.filter(id => id !== performanceId)
         : [...prev, performanceId]
@@ -94,7 +94,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
   // Handle creating a new performance
   const handleCreatePerformance = async () => {
     if (!newPerformanceName.trim()) return;
-    
+
     try {
       await createPerformance(newPerformanceName);
       setNewPerformanceName('');
@@ -107,7 +107,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
   // Handle creating a new rehearsal
   const handleCreateRehearsal = async (performanceId: string) => {
     if (!performanceId) return;
-    
+
     try {
       const today = new Date().toISOString().split('T')[0];
       const newRehearsal = {
@@ -115,14 +115,11 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         location: 'Studio',
         date: today
       };
-      
+
       await createRehearsal(
-        performanceId,
-        newRehearsal.name,
-        newRehearsal.location,
-        newRehearsal.date
+        newRehearsal.name
       );
-      
+
       // Ensure the performance is expanded to show the new rehearsal
       if (!expandedPerformanceIds.includes(performanceId)) {
         setExpandedPerformanceIds(prev => [...prev, performanceId]);
@@ -131,7 +128,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
       console.error('Error creating rehearsal:', error);
     }
   };
-  
+
   // Handle watching a recording
   const handleWatchRecording = async (rehearsalId: string, recording: Recording) => {
     try {
@@ -149,7 +146,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
         <div className="text-center p-4">
           <h2 className="text-xl font-semibold mb-4">Connect Google Drive</h2>
           <p className="mb-4">Connect your Google Drive account to store and access your recordings.</p>
-          <button 
+          <button
             onClick={connectToGoogle}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
           >
@@ -167,6 +164,8 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
       </div>
     );
   }
+
+  const hasRehearsals = performances.some((p: Performance) => p.rehearsals.some((r: Rehearsal) => true));
 
   return (
     <div className="space-y-4">
@@ -216,7 +215,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
       ) : null}
 
       <div className="space-y-2">
-        {performances.map((performance) => (
+        {performances.map((performance: Performance) => (
           <div key={performance.id} className="bg-white rounded-lg shadow-md overflow-hidden">
             <div
               className="p-4 flex items-center justify-between cursor-pointer"
@@ -231,12 +230,12 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
                 <h3 className="font-medium">{performance.title}</h3>
               </div>
             </div>
-            
+
             {expandedPerformanceIds.includes(performance.id) && (
               <div className="pl-10 pr-4 pb-4 space-y-2">
                 {/* List rehearsals for this performance */}
                 {rehearsals[performance.id]?.length > 0 ? (
-                  rehearsals[performance.id].map((rehearsal) => (
+                  rehearsals[performance.id].map((rehearsal: Rehearsal) => (
                     <div key={rehearsal.id} className="border rounded-md overflow-hidden">
                       <div
                         className="p-3 bg-gray-50 flex items-center justify-between cursor-pointer"
@@ -255,13 +254,13 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
                           <span>{rehearsal.date}</span>
                         </div>
                       </div>
-                      
+
                       {expandedRehearsal[rehearsal.id] && (
                         <div className="p-3">
-                          {recordings[rehearsal.id]?.length > 0 ? (
+                          {Array.isArray(rehearsal.recordings) && rehearsal.recordings.length > 0 ? (
                             <div className="space-y-2">
-                              {recordings[rehearsal.id].map((recording) => (
-                                <div 
+                              {rehearsal.recordings.map((recording: Recording) => (
+                                <div
                                   key={recording.id}
                                   className="flex items-center justify-between p-2 hover:bg-gray-50 rounded-md cursor-pointer"
                                   onClick={() => handleWatchRecording(rehearsal.id, recording)}
@@ -280,9 +279,9 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
                           ) : (
                             <p className="text-sm text-gray-500">No recordings yet</p>
                           )}
-                          
+
                           <div className="mt-3 flex justify-end">
-                            <button 
+                            <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 toggleRecordingOptions(rehearsal.id, e);
@@ -299,7 +298,7 @@ const PerformanceSelector: React.FC<PerformanceSelectorProps> = ({
                 ) : (
                   <p className="text-sm text-gray-500">No rehearsals yet</p>
                 )}
-                
+
                 <button
                   onClick={() => handleCreateRehearsal(performance.id)}
                   className="text-sm text-blue-600 flex items-center mt-2"

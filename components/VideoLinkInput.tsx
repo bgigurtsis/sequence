@@ -13,29 +13,29 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
   const [title, setTitle] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!url) {
       setError('Please enter a video URL');
       return;
     }
-    
+
     if (!title) {
       setError('Please enter a title for this video');
       return;
     }
-    
+
     try {
       setIsProcessing(true);
-      
+
       // Validate URL (ensuring it starts with http/https)
       let validUrl = url;
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         validUrl = 'https://' + url;
       }
-      
+
       try {
         new URL(validUrl);
       } catch (e) {
@@ -43,12 +43,12 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
         setIsProcessing(false);
         return;
       }
-      
+
       // Pass the validated URL to the parent
       onLinkSubmit(validUrl, title);
-    } catch (error) {
-      console.error('Error processing video link:', error);
-      setError('Failed to process link: ' + (error.message || 'Unknown error'));
+    } catch (error: unknown) {
+      console.error('Error uploading video link:', error);
+      setError((error as Error).message || 'Failed to upload video link');
       setIsProcessing(false);
     }
   };
@@ -56,7 +56,7 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
   return (
     <div className="bg-white rounded-lg p-4 max-w-lg w-full">
       <div className="flex items-center mb-4">
-        <button 
+        <button
           onClick={onCancel}
           className="mr-2 text-gray-500 hover:text-gray-700"
         >
@@ -64,13 +64,13 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
         </button>
         <h2 className="text-xl font-semibold">Add Video Link</h2>
       </div>
-      
+
       {error && (
         <div className="mb-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded text-sm">
           {error}
         </div>
       )}
-      
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -85,7 +85,7 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
             required
           />
         </div>
-        
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Video URL
@@ -102,7 +102,7 @@ const VideoLinkInput: React.FC<VideoLinkInputProps> = ({ onLinkSubmit, onCancel 
             Supported platforms: YouTube, Vimeo, Google Drive, Dropbox
           </p>
         </div>
-        
+
         <div className="flex space-x-3 pt-4">
           <button
             type="button"

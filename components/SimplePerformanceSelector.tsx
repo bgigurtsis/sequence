@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
 import { useGoogleDrive } from '@/contexts/GoogleDriveContext';
 import { PlusCircle, ChevronDown, ChevronRight } from 'lucide-react';
+import { Performance, Rehearsal } from '@/types';
 
 export default function SimplePerformanceSelector() {
   const [isCreatingPerformance, setIsCreatingPerformance] = useState(false);
   const [newPerformanceName, setNewPerformanceName] = useState('');
   const [expandedPerformanceIds, setExpandedPerformanceIds] = useState<string[]>([]);
   const [selectedPerformanceId, setSelectedPerformanceId] = useState<string | null>(null);
-  
-  const { 
-    performances, 
+
+  const {
+    performances,
     rehearsals,
-    createPerformance, 
+    createPerformance,
     createRehearsal,
     isLoading,
     needsGoogleAuth,
@@ -20,7 +21,7 @@ export default function SimplePerformanceSelector() {
 
   // Toggle performance expansion
   const togglePerformance = (performanceId: string) => {
-    setExpandedPerformanceIds(prev => 
+    setExpandedPerformanceIds(prev =>
       prev.includes(performanceId)
         ? prev.filter(id => id !== performanceId)
         : [...prev, performanceId]
@@ -31,7 +32,7 @@ export default function SimplePerformanceSelector() {
   // Handle creating a new performance
   const handleCreatePerformance = async () => {
     if (!newPerformanceName.trim()) return;
-    
+
     try {
       await createPerformance(newPerformanceName);
       setNewPerformanceName('');
@@ -44,7 +45,7 @@ export default function SimplePerformanceSelector() {
   // Handle creating a new rehearsal
   const handleCreateRehearsal = async (performanceId: string) => {
     if (!performanceId) return;
-    
+
     try {
       const today = new Date().toISOString().split('T')[0];
       const newRehearsal = {
@@ -52,14 +53,9 @@ export default function SimplePerformanceSelector() {
         location: 'Studio',
         date: today
       };
-      
-      await createRehearsal(
-        performanceId,
-        newRehearsal.name,
-        newRehearsal.location,
-        newRehearsal.date
-      );
-      
+
+      await createRehearsal(newRehearsal.name);
+
       // Ensure the performance is expanded to show the new rehearsal
       if (!expandedPerformanceIds.includes(performanceId)) {
         setExpandedPerformanceIds(prev => [...prev, performanceId]);
@@ -76,7 +72,7 @@ export default function SimplePerformanceSelector() {
         <div className="text-center p-4">
           <h2 className="text-xl font-semibold mb-4">Connect Google Drive</h2>
           <p className="mb-4">Connect your Google Drive account to store and access your recordings.</p>
-          <button 
+          <button
             onClick={connectToGoogle}
             className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
           >
@@ -110,7 +106,7 @@ export default function SimplePerformanceSelector() {
           </button>
         </div>
       </div>
-      
+
       {/* New Performance Form */}
       {isCreatingPerformance && (
         <div className="p-4 border-b bg-gray-50">
@@ -142,7 +138,7 @@ export default function SimplePerformanceSelector() {
           </div>
         </div>
       )}
-      
+
       {/* Performances List */}
       <div className="max-h-96 overflow-y-auto">
         {performances.length === 0 ? (
@@ -151,13 +147,12 @@ export default function SimplePerformanceSelector() {
           </div>
         ) : (
           <ul className="divide-y divide-gray-200">
-            {performances.map((performance) => (
+            {performances.map((performance: Performance) => (
               <li key={performance.id} className="relative">
                 {/* Performance Item */}
-                <div 
-                  className={`flex items-center p-4 cursor-pointer hover:bg-gray-50 ${
-                    selectedPerformanceId === performance.id ? 'bg-blue-50' : ''
-                  }`}
+                <div
+                  className={`flex items-center p-4 cursor-pointer hover:bg-gray-50 ${selectedPerformanceId === performance.id ? 'bg-blue-50' : ''
+                    }`}
                   onClick={() => togglePerformance(performance.id)}
                 >
                   <div className="mr-2">
@@ -180,14 +175,14 @@ export default function SimplePerformanceSelector() {
                     <PlusCircle size={16} />
                   </button>
                 </div>
-                
+
                 {/* Rehearsals List */}
                 {expandedPerformanceIds.includes(performance.id) && (
                   <ul className="pl-8 bg-gray-50 divide-y divide-gray-100">
                     {rehearsals[performance.id]?.length > 0 ? (
-                      rehearsals[performance.id].map((rehearsal) => (
+                      rehearsals[performance.id].map((rehearsal: Rehearsal) => (
                         <li key={rehearsal.id}>
-                          <a 
+                          <a
                             href={`/rehearsal/${rehearsal.id}`}
                             className="block p-3 hover:bg-gray-100"
                           >

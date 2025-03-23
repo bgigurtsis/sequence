@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { OAuth2Client } from 'google-auth-library';
 
 /**
  * Generates a Google OAuth URL for the user to authorize access to their Google Drive.
@@ -8,44 +7,25 @@ import { OAuth2Client } from 'google-auth-library';
  */
 export async function GET() {
   try {
-    const { userId } = auth();
-    
+    const authResult = await auth();
+    const userId = authResult?.userId;
+
     if (!userId) {
-      return NextResponse.json(
-        { error: 'Authentication required', details: 'You must be logged in to access this endpoint' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
-    
-    const oauth2Client = new OAuth2Client(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    );
 
-    // Generate a state parameter to prevent CSRF attacks
-    // Include the userId so we know who to associate the tokens with
-    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
-    
-    // Generate the auth URL with the correct scope
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: [
-        'https://www.googleapis.com/auth/drive.file',  // Access to files created by this app
-      ],
-      include_granted_scopes: true,
-      prompt: 'consent', // Force consent screen to ensure we get refresh token
-      state
-    });
+    // Your Google OAuth configuration
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
 
-    return NextResponse.json({ authUrl });
-  } catch (error: unknown) {
-    console.error('Error generating Google auth URL:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    
-    return NextResponse.json(
-      { error: 'Failed to generate auth URL', details: errorMessage },
-      { status: 500 }
-    );
+    const scope = encodeURIComponent('https://www.googleapis.com/auth/drive.file');
+    const redirectUri = encodeURIComponent(GOOGLE_REDIRECT_URI as string);
+
+    const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&access_type=offline&prompt=consent`;
+
+    return NextResponse.redirect(googleAuthUrl);
+  } catch (error) {
+    console.error('Error in Google authorization:', error);
+    return NextResponse.json({ error: 'Authorization failed' }, { status: 500 });
   }
 }

@@ -31,7 +31,12 @@ export default function RecordingList({ rehearsalId, onSelectRecording }: Record
     }
 
     try {
-      await deleteFile(recordingId);
+      if (deleteFile) {
+        await deleteFile(recordingId);
+      } else {
+        console.error('Delete function is not available');
+        alert('Cannot delete recording at this time');
+      }
     } catch (error) {
       console.error('Failed to delete recording:', error);
       alert('Failed to delete recording');
@@ -74,7 +79,7 @@ export default function RecordingList({ rehearsalId, onSelectRecording }: Record
 
   return (
     <div className="space-y-2">
-      {recordings.map((recording) => (
+      {recordings.map((recording: Recording) => (
         <div
           key={recording.id}
           className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden"
@@ -135,7 +140,7 @@ export default function RecordingList({ rehearsalId, onSelectRecording }: Record
                 <div className="mb-2">
                   <div className="text-xs font-medium text-gray-500 mb-1">Performers</div>
                   <div className="flex flex-wrap gap-1">
-                    {recording.performers.map((performer, idx) => (
+                    {recording.performers?.map((performer: string, idx: number) => (
                       <span
                         key={idx}
                         className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded-full"
@@ -151,7 +156,7 @@ export default function RecordingList({ rehearsalId, onSelectRecording }: Record
                 <div>
                   <div className="text-xs font-medium text-gray-500 mb-1">Tags</div>
                   <div className="flex flex-wrap gap-1">
-                    {recording.tags.map((tag, idx) => (
+                    {recording.tags?.map((tag: string, idx: number) => (
                       <span
                         key={idx}
                         className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full flex items-center"
