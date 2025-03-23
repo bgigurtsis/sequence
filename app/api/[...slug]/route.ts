@@ -300,13 +300,13 @@ export async function PATCH(request: NextRequest, { params }: { params: { slug: 
 // Set configuration
 export const dynamic = 'force-dynamic';
 
-// Conditionally set maxDuration based on route
-export function generateMetadata({ params }: { params: { slug: string[] } }) {
-    const slug = params.slug.join('/');
-    const route = routes[slug];
+// Commenting out or removing this function fixes the build error
+// export function generateMetadata({ params }: { params: { slug: string[] } }) {
+//     const slug = params.slug.join('/');
+//     const route = routes[slug];
 
-    return {
-        title: `API - ${slug}`,
-        config: route?.config || {}
-    };
-} 
+//     return {
+//         title: `API - ${slug}`,
+//         config: route?.config || {}
+//     };
+// } 

@@ -1,4 +1,5 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextResponse, NextRequest } from 'next/server';
 
 // Define public routes that don't require authentication
 const isPublicRoute = createRouteMatcher([
@@ -8,13 +9,23 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)'
 ]);
 
+// Checks if a request is for an API route
+const isApiRoute = (req: NextRequest): boolean => {
+  return req.nextUrl.pathname.startsWith('/api/');
+};
+
 export default clerkMiddleware((auth, req) => {
   // Protect all routes except public ones
   if (!isPublicRoute(req)) {
     // Check if the user is not authenticated
     // @ts-ignore - Clerk type definitions might be outdated
     if (!auth.userId) {
-      // Use "/sign-in" instead of "/login" since that's Clerk's default path
+      // Handle API routes differently - return JSON instead of redirecting
+      if (isApiRoute(req)) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      }
+
+      // For regular routes, redirect to sign-in
       const signInUrl = new URL('/sign-in', req.url);
       return Response.redirect(signInUrl);
     }
