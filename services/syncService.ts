@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 // import { videoStorage } from './videoStorage'; // (Unused in your snippet)
 import { Performance, Recording, Metadata } from '../types';
 import { getGoogleRefreshToken } from '@/lib/clerkAuth';
-import { checkGoogleDriveConnection } from '@/lib/googleDrive';
+import { googleDriveService } from '@/lib/GoogleDriveService';
 
 export interface SyncQueueItem {
   id: string;
@@ -72,7 +72,7 @@ class SyncService {
     isOnline: true,
     isSyncing: false,
   };
-  
+
   // Initialize syncErrors as an empty object
   private syncErrors: Record<string, string> = {};
   private listeners: (() => void)[] = [];
@@ -81,17 +81,17 @@ class SyncService {
 
   constructor() {
     console.log('Sync service initializing');
-    
+
     // Only proceed with client-side operations
     if (typeof window !== 'undefined') {
       this.loadFromStorage();
-      
+
       window.addEventListener('online', () => this.setOnlineStatus(true));
       window.addEventListener('offline', () => this.setOnlineStatus(false));
-      
+
       // Check initial online status
       this.setOnlineStatus(navigator.onLine);
-      
+
       // Start sync service
       this.startSyncService();
     }
@@ -102,18 +102,18 @@ class SyncService {
       const storedState = localStorage.getItem('syncState');
       if (storedState) {
         const parsedState = JSON.parse(storedState);
-        
+
         // Restore basic state properties
         this.state.lastSync = parsedState.lastSync;
         this.state.lastSuccess = parsedState.lastSuccess;
         this.state.isOnline = parsedState.isOnline ?? true;
         this.state.isSyncing = false;
-        
+
         // Queue items won't have Blobs, so we need to mark them as needing reload
         if (parsedState.queue && Array.isArray(parsedState.queue)) {
           // Filter out any invalid queue items and create placeholder Blobs
           this.state.queue = parsedState.queue
-            .filter((item: StoredSyncQueueItem) => 
+            .filter((item: StoredSyncQueueItem) =>
               item && item.id && item.performanceId && item.status
             )
             .map((item: StoredSyncQueueItem) => ({
@@ -125,9 +125,9 @@ class SyncService {
               needsBlobReload: true,
               status: item.status === 'syncing' ? 'pending' : item.status
             }));
-          
+
           console.log(`Loaded ${this.state.queue.length} items from storage`);
-          
+
           // Check for any queued items marked as completed
           const completedItems = this.state.queue.filter(item => item.status === 'completed');
           if (completedItems.length > 0) {
@@ -135,12 +135,12 @@ class SyncService {
             this.state.queue = this.state.queue.filter(item => item.status !== 'completed');
           }
         }
-        
+
         // Also restore error states if available
         if (parsedState.syncErrors && typeof parsedState.syncErrors === 'object') {
           this.syncErrors = parsedState.syncErrors;
         }
-        
+
         console.log('Sync state loaded from storage:', {
           queueSize: this.state.queue.length,
           lastSync: this.state.lastSync,
@@ -164,13 +164,13 @@ class SyncService {
     try {
       // Create a copy of the state to avoid modifying the original
       const stateCopy = { ...this.state };
-      
+
       // Convert queue items to a storable format (removing Blobs)
       if (stateCopy.queue && Array.isArray(stateCopy.queue)) {
         const storedQueue: StoredSyncQueueItem[] = stateCopy.queue.map(item => {
           // Create a copy without Blob properties that can't be serialized
           const { video, thumbnail, needsBlobReload, ...itemWithoutBlobs } = item;
-          
+
           return {
             ...itemWithoutBlobs,
             // Just store the sizes or any other info you need
@@ -178,17 +178,17 @@ class SyncService {
             thumbnailSize: thumbnail ? thumbnail.size : 0
           };
         });
-        
+
         // Replace the queue with the storable format
         (stateCopy as any).queue = storedQueue;
       }
-      
+
       // Also save error states
       const stateToSave = {
         ...stateCopy,
         syncErrors: this.syncErrors
       };
-      
+
       localStorage.setItem('syncState', JSON.stringify(stateToSave));
       console.log('Sync state saved to storage', {
         queueSize: stateCopy.queue.length,
@@ -205,7 +205,7 @@ class SyncService {
       this.state.isOnline = isOnline;
       this.notifyListeners();
       this.saveToStorage();
-      
+
       if (isOnline && this.getPendingCount() > 0) {
         console.log('Back online with pending items, triggering sync');
         this.sync();
@@ -215,17 +215,17 @@ class SyncService {
 
   private startSyncService() {
     console.log('Starting sync service');
-    
+
     // Run initial sync check
     if (this.state.isOnline) {
       this.sync();
     }
-    
+
     // Set up interval for periodic sync attempts
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
     }
-    
+
     this.syncInterval = setInterval(() => {
       if (this.state.isOnline && !this.state.isSyncing) {
         this.sync();
@@ -243,14 +243,14 @@ class SyncService {
   ) {
     // Try to get the current user ID to store with the item
     let userId: string | undefined;
-    
+
     // Create a unique ID for this sync item
     const id = `sync-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-    
+
     // Get video and thumbnail size for logging
     const videoSize = `${(video.size / (1024 * 1024)).toFixed(2)}MB`;
     const thumbnailSize = `${(thumbnail.size / 1024).toFixed(0)}KB`;
-    
+
     console.log(`Queueing recording for sync: ${id}`);
     console.log({
       performanceId,
@@ -260,7 +260,7 @@ class SyncService {
       thumbnailSize,
       metadata
     });
-    
+
     // Attempt to get current user ID asynchronously
     fetch('/api/auth/me')
       .then(response => {
@@ -275,7 +275,7 @@ class SyncService {
         if (data && data.userId) {
           userId = data.userId;
           console.log(`Found user ID for sync item: ${userId}`);
-          
+
           // Update the item in the queue with the userId if we already added it
           const existingItemIndex = this.state.queue.findIndex(item => item.id === id);
           if (existingItemIndex !== -1) {
@@ -290,7 +290,7 @@ class SyncService {
       .catch(error => {
         console.error('Could not get user ID when queueing item:', error);
       });
-    
+
     // Create the sync item
     const syncItem: SyncQueueItem = {
       id,
@@ -305,19 +305,19 @@ class SyncService {
       attemptCount: 0,
       status: 'pending'
     };
-    
+
     // Add to queue
     this.state.queue.push(syncItem);
     this.saveToStorage();
-    
+
     console.log(`Item added to sync queue, current queue size: ${this.state.queue.length}`);
-    
+
     // If we're online and not currently syncing, trigger a sync
     if (this.state.isOnline && !this.state.isSyncing) {
       console.log('Online and not syncing, triggering immediate sync');
       this.sync();
     }
-    
+
     return id;
   }
 
@@ -339,7 +339,7 @@ class SyncService {
       // 1) Get user ID from /api/auth/me
       const userResponse = await fetch('/api/auth/me');
       console.log('User response status:', userResponse.statusText);
-      
+
       // Check content type to ensure we're getting JSON
       {
         const contentType = userResponse.headers.get('content-type');
@@ -349,7 +349,7 @@ class SyncService {
           throw new Error('API returned HTML instead of JSON');
         }
       }
-      
+
       const userData = await userResponse.json();
       let userId = userData.userId;
 
@@ -382,14 +382,14 @@ class SyncService {
         formData.append('performanceId', item.performanceId);
         formData.append('performanceTitle', item.performanceTitle || '');
         formData.append('userId', userId);
-        
+
         if (item.video) {
           formData.append('video', item.video);
         }
         if (item.thumbnail) {
           formData.append('thumbnail', item.thumbnail);
         }
-        
+
         // Add metadata as JSON string
         const metadata = {
           ...item,
@@ -453,7 +453,7 @@ class SyncService {
   public getFailedCount() {
     return this.state.queue.filter(item => item.status === 'failed').length;
   }
-  
+
   public getFailedItems() {
     return this.state.queue.filter(item => item.status === 'failed');
   }
@@ -491,7 +491,7 @@ class SyncService {
     });
     this.notifyListeners();
     this.saveToStorage();
-    
+
     if (this.state.isOnline) {
       this.sync();
     }
