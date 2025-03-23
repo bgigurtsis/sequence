@@ -4,6 +4,12 @@ import { Performance, Recording, Metadata } from '../types';
 import { getGoogleRefreshToken } from '@/lib/clerkAuth';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 
+// Add timestamp to logs
+function logWithTimestamp(type: string, message: string, data?: any) {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}][SyncService][${type}] ${message}`, data ? data : '');
+}
+
 export interface SyncQueueItem {
   id: string;
   performanceId: string;
@@ -80,7 +86,7 @@ class SyncService {
   private initialized = false;
 
   constructor() {
-    console.log('Sync service initializing');
+    logWithTimestamp('INIT', 'Sync service initializing');
 
     // Only proceed with client-side operations
     if (typeof window !== 'undefined') {
@@ -126,12 +132,12 @@ class SyncService {
               status: item.status === 'syncing' ? 'pending' : item.status
             }));
 
-          console.log(`Loaded ${this.state.queue.length} items from storage`);
+          logWithTimestamp('STORAGE', `Loaded ${this.state.queue.length} items from storage`);
 
           // Check for any queued items marked as completed
           const completedItems = this.state.queue.filter(item => item.status === 'completed');
           if (completedItems.length > 0) {
-            console.log(`Found ${completedItems.length} completed items, removing from queue`);
+            logWithTimestamp('STORAGE', `Found ${completedItems.length} completed items, removing from queue`);
             this.state.queue = this.state.queue.filter(item => item.status !== 'completed');
           }
         }
@@ -141,7 +147,7 @@ class SyncService {
           this.syncErrors = parsedState.syncErrors;
         }
 
-        console.log('Sync state loaded from storage:', {
+        logWithTimestamp('STORAGE', 'Sync state loaded from storage', {
           queueSize: this.state.queue.length,
           lastSync: this.state.lastSync,
           isOnline: this.state.isOnline
@@ -190,7 +196,7 @@ class SyncService {
       };
 
       localStorage.setItem('syncState', JSON.stringify(stateToSave));
-      console.log('Sync state saved to storage', {
+      logWithTimestamp('STORAGE', 'Sync state saved to storage', {
         queueSize: stateCopy.queue.length,
         lastSync: stateCopy.lastSync
       });
@@ -201,20 +207,20 @@ class SyncService {
 
   private setOnlineStatus(isOnline: boolean) {
     if (this.state.isOnline !== isOnline) {
-      console.log(`Connection status changed: ${isOnline ? 'Online' : 'Offline'}`);
+      logWithTimestamp('NETWORK', `Connection status changed: ${isOnline ? 'Online' : 'Offline'}`);
       this.state.isOnline = isOnline;
       this.notifyListeners();
       this.saveToStorage();
 
       if (isOnline && this.getPendingCount() > 0) {
-        console.log('Back online with pending items, triggering sync');
+        logWithTimestamp('NETWORK', 'Back online with pending items, triggering sync');
         this.sync();
       }
     }
   }
 
   private startSyncService() {
-    console.log('Starting sync service');
+    logWithTimestamp('INIT', 'Starting sync service');
 
     // Run initial sync check
     if (this.state.isOnline) {
@@ -251,8 +257,7 @@ class SyncService {
     const videoSize = `${(video.size / (1024 * 1024)).toFixed(2)}MB`;
     const thumbnailSize = `${(thumbnail.size / 1024).toFixed(0)}KB`;
 
-    console.log(`Queueing recording for sync: ${id}`);
-    console.log({
+    logWithTimestamp('QUEUE', `Queueing recording for sync: ${id}`, {
       performanceId,
       performanceTitle,
       rehearsalId,
@@ -262,33 +267,44 @@ class SyncService {
     });
 
     // Attempt to get current user ID asynchronously
+    logWithTimestamp('AUTH', 'Fetching user ID from /api/auth/me');
+
     fetch('/api/auth/me')
       .then(response => {
+        logWithTimestamp('AUTH', `Response from /api/auth/me - Status: ${response.status} ${response.statusText}`);
+        logWithTimestamp('AUTH', 'Response headers:', Object.fromEntries(response.headers.entries()));
+
         // If the endpoint returns HTML instead of JSON, this will throw:
         const contentType = response.headers.get('content-type');
         if (!contentType || !contentType.includes('application/json')) {
-          throw new Error(`Expected JSON, got: ${contentType || 'unknown'}`);
+          logWithTimestamp('AUTH', `Error: Expected JSON, got: ${contentType || 'unknown'}`);
+          // Try to get the response text to see what we're actually getting
+          return response.text().then(text => {
+            logWithTimestamp('AUTH', 'Response body (not JSON):', text.substring(0, 200) + '...');
+            throw new Error(`Expected JSON, got: ${contentType || 'unknown'}`);
+          });
         }
         return response.json();
       })
       .then(data => {
+        logWithTimestamp('AUTH', 'User data received:', data);
         if (data && data.userId) {
           userId = data.userId;
-          console.log(`Found user ID for sync item: ${userId}`);
+          logWithTimestamp('AUTH', `Found user ID for sync item: ${userId}`);
 
           // Update the item in the queue with the userId if we already added it
           const existingItemIndex = this.state.queue.findIndex(item => item.id === id);
           if (existingItemIndex !== -1) {
             this.state.queue[existingItemIndex].userId = userId;
             this.saveToStorage();
-            console.log(`Updated existing queue item with user ID: ${userId}`);
+            logWithTimestamp('AUTH', `Updated existing queue item with user ID: ${userId}`);
           }
         } else {
-          console.warn('No userId returned from /api/auth/me');
+          logWithTimestamp('AUTH', 'No userId returned from /api/auth/me', data);
         }
       })
       .catch(error => {
-        console.error('Could not get user ID when queueing item:', error);
+        logWithTimestamp('AUTH', 'Could not get user ID when queueing item:', error.toString());
       });
 
     // Create the sync item
@@ -310,11 +326,11 @@ class SyncService {
     this.state.queue.push(syncItem);
     this.saveToStorage();
 
-    console.log(`Item added to sync queue, current queue size: ${this.state.queue.length}`);
+    logWithTimestamp('QUEUE', `Item added to sync queue, current queue size: ${this.state.queue.length}`);
 
     // If we're online and not currently syncing, trigger a sync
     if (this.state.isOnline && !this.state.isSyncing) {
-      console.log('Online and not syncing, triggering immediate sync');
+      logWithTimestamp('SYNC', 'Online and not syncing, triggering immediate sync');
       this.sync();
     }
 
@@ -323,34 +339,46 @@ class SyncService {
 
   public async sync() {
     if (this.state.isSyncing || !this.state.isOnline) {
-      console.log('Sync already in progress or offline');
+      logWithTimestamp('SYNC', `Sync aborted: ${this.state.isSyncing ? 'Already syncing' : 'Offline'}`);
       return;
     }
 
     if (this.state.queue.length === 0) {
-      console.log('Nothing to sync');
+      logWithTimestamp('SYNC', 'Nothing to sync');
       return;
     }
 
     this.state.isSyncing = true;
     this.notifyListeners();
+    logWithTimestamp('SYNC', 'Starting sync process');
 
     try {
       // 1) Get user ID from /api/auth/me
-      const userResponse = await fetch('/api/auth/me');
-      console.log('User response status:', userResponse.statusText);
+      logWithTimestamp('SYNC', 'Making fetch request to /api/auth/me');
+      const userResponse = await fetch('/api/auth/me', {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+
+      logWithTimestamp('SYNC', `User response status: ${userResponse.status} ${userResponse.statusText}`);
+      logWithTimestamp('SYNC', 'Response headers:', Object.fromEntries(userResponse.headers.entries()));
 
       // Check content type to ensure we're getting JSON
       {
         const contentType = userResponse.headers.get('content-type');
+        logWithTimestamp('SYNC', `Content-Type of response: ${contentType}`);
+
         if (!contentType || !contentType.includes('application/json')) {
           const htmlResponse = await userResponse.text();
-          console.error('API returned HTML:', htmlResponse);
+          logWithTimestamp('SYNC', 'API returned non-JSON content:', htmlResponse.substring(0, 500) + '...');
           throw new Error('API returned HTML instead of JSON');
         }
       }
 
       const userData = await userResponse.json();
+      logWithTimestamp('SYNC', 'User data received:', userData);
+
       let userId = userData.userId;
 
       if (!userId) {
@@ -358,23 +386,23 @@ class SyncService {
         const firstItem = this.state.queue[0];
         if (firstItem?.userId) {
           userId = firstItem.userId;
-          console.log('Using userId from queue item:', userId);
+          logWithTimestamp('SYNC', 'Using userId from queue item:', userId);
         } else if (firstItem?.performanceId) {
           // Fallback if absolutely necessary (not recommended):
           userId = firstItem.performanceId.split('-')[0];
-          console.warn('⚠️ No user ID found, using performanceId as fallback:', firstItem.performanceId);
+          logWithTimestamp('SYNC', '⚠️ No user ID found, using performanceId as fallback:', firstItem.performanceId);
         } else {
           throw new Error('No user ID available for sync');
         }
       }
 
-      console.log('Final user ID for sync:', userId);
+      logWithTimestamp('SYNC', 'Final user ID for sync:', userId);
 
       // 2) Process each item in the queue
       for (const item of this.state.queue) {
         if (!item) continue;
 
-        console.log(`Uploading recording ${item.id} for user ${userId}`);
+        logWithTimestamp('SYNC', `Uploading recording ${item.id} for user ${userId}`);
 
         // Create FormData for the upload
         const formData = new FormData();
@@ -401,39 +429,47 @@ class SyncService {
         formData.append('metadataString', JSON.stringify(metadata));
 
         // 3) Upload to form endpoint
+        logWithTimestamp('SYNC', 'Making POST request to /api/upload/form');
         const uploadResponse = await fetch('/api/upload/form', {
           method: 'POST',
+          headers: {
+            'Accept': 'application/json'
+          },
           body: formData
         });
 
-        console.log('Upload response status:', uploadResponse.statusText);
+        logWithTimestamp('SYNC', `Upload response status: ${uploadResponse.status} ${uploadResponse.statusText}`);
+        logWithTimestamp('SYNC', 'Upload response headers:', Object.fromEntries(uploadResponse.headers.entries()));
 
         // Check content type to ensure we're getting JSON
         {
           const uploadContentType = uploadResponse.headers.get('content-type');
+          logWithTimestamp('SYNC', `Content-Type of upload response: ${uploadContentType}`);
+
           if (!uploadContentType || !uploadContentType.includes('application/json')) {
             const htmlResponse = await uploadResponse.text();
-            console.error('Received HTML instead of JSON from upload endpoint:');
-            console.error(htmlResponse);
+            logWithTimestamp('SYNC', 'Received non-JSON response from upload endpoint:', htmlResponse.substring(0, 500) + '...');
             throw new Error('Server returned HTML instead of JSON');
           }
         }
 
         const result = await uploadResponse.json();
+        logWithTimestamp('SYNC', 'Upload result:', result);
 
         if (!uploadResponse.ok) {
           throw new Error(result.error || 'Upload failed');
         }
 
         // Remove successful upload from queue
+        logWithTimestamp('SYNC', `Upload successful for item ${item.id}, removing from queue`);
         this.state.queue = this.state.queue.filter(qItem => qItem?.id !== item.id);
         this.state.lastSuccess = new Date().toISOString();
         this.saveToStorage();
       }
 
-      console.log('Sync completed successfully');
+      logWithTimestamp('SYNC', 'Sync completed successfully');
     } catch (error) {
-      console.error('Sync error:', error);
+      logWithTimestamp('SYNC', 'Sync error:', error instanceof Error ? error.message : String(error));
       throw error; // Ensure the error surfaces
     } finally {
       this.state.lastSync = new Date().toISOString();
@@ -475,14 +511,14 @@ class SyncService {
   }
 
   public clearFailedItems() {
-    console.log('Clearing failed sync items');
+    logWithTimestamp('QUEUE', 'Clearing failed sync items');
     this.state.queue = this.state.queue.filter(item => item.status !== 'failed');
     this.notifyListeners();
     this.saveToStorage();
   }
 
   public retryFailedItems() {
-    console.log('Retrying failed sync items');
+    logWithTimestamp('QUEUE', 'Retrying failed sync items');
     this.state.queue.forEach(item => {
       if (item.status === 'failed') {
         item.status = 'pending';
@@ -536,6 +572,46 @@ class SyncService {
       item.error = error;
       this.notifyListeners();
       this.saveToStorage();
+    }
+  }
+
+  async getUserId(): Promise<string | null> {
+    try {
+      this.logWithTimestamp('AUTH', 'Fetching user ID from /api/auth/me');
+
+      const response = await fetch('/api/auth/me', {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        credentials: 'include'
+      });
+
+      this.logWithTimestamp('AUTH', `Response from /api/auth/me - Status: ${response.status} ${response.statusText}`);
+      this.logWithTimestamp('AUTH', `Response headers:`, Object.fromEntries(response.headers.entries()));
+
+      // Check if response is actually JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        // If not JSON, get the text to see what was returned
+        const body = await response.text();
+        this.logWithTimestamp('AUTH', `Error: Expected JSON, got: ${contentType}`, { bodyPreview: body.substring(0, 200) });
+        throw new Error(`Expected JSON, got: ${contentType}`);
+      }
+
+      const data = await response.json();
+
+      if (!data.authenticated) {
+        this.logWithTimestamp('AUTH', 'User not authenticated', { data });
+        return null;
+      }
+
+      this.logWithTimestamp('AUTH', 'Successfully retrieved user ID', { userId: data.userId });
+      return data.userId;
+    } catch (error) {
+      this.logWithTimestamp('AUTH', `Could not get user ID: ${error.message}`);
+      return null;
     }
   }
 }

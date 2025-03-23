@@ -6,6 +6,12 @@ import * as AuthHandlers from '@/app/api-handlers/auth';
 import * as UploadHandlers from '@/app/api-handlers/upload';
 import * as DeleteHandlers from '@/app/api-handlers/delete';
 
+// Add detailed logging helper
+function logWithTimestamp(type: string, message: string, data?: any) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}][API][Router][${type}] ${message}`, data ? data : '');
+}
+
 interface RouteHandler {
     GET?: (request: NextRequest, params?: any) => Promise<NextResponse>;
     POST?: (request: NextRequest, params?: any) => Promise<NextResponse>;
@@ -80,7 +86,7 @@ const routes: Record<string, RouteHandler> = {
 
 // Helper to log requests
 function logRequest(method: string, path: string, userId?: string | null) {
-    console.log(`[${new Date().toISOString()}] ${method} ${path} ${userId ? `(User: ${userId})` : '(Not authenticated)'}`);
+    logWithTimestamp('REQUEST', `${method} ${path} ${userId ? `(User: ${userId})` : '(Not authenticated)'}`);
 }
 
 // Error handling wrapper
@@ -92,32 +98,65 @@ async function handleRequest(
     params?: any
 ) {
     try {
+        logWithTimestamp('HANDLER', `Processing ${method} request`, {
+            url: request.url,
+            requiresAuth,
+            headers: Object.fromEntries(request.headers)
+        });
+
         // For auth checking, we need to await it 
         const authResult = await auth();
         const userId = authResult.userId;
 
+        logWithTimestamp('AUTH', `Auth check result: ${userId ? 'Authenticated' : 'Not authenticated'}`, {
+            userId,
+            authResult
+        });
+
         if (requiresAuth && !userId) {
-            return NextResponse.json(
+            logWithTimestamp('AUTH', 'Auth required but user not authenticated');
+            const response = NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
             );
+
+            // Ensure we're sending JSON content type
+            response.headers.set('Content-Type', 'application/json');
+
+            return response;
         }
 
         // Call the handler
-        return await handler(request, params);
+        logWithTimestamp('HANDLER', `Calling handler for ${method}`);
+        const response = await handler(request, params);
+
+        logWithTimestamp('RESPONSE', `Handler response`, {
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries())
+        });
+
+        // Ensure we're sending JSON content type
+        response.headers.set('Content-Type', 'application/json');
+
+        return response;
     } catch (error: any) {
-        console.error(`Error handling ${method} request:`, error);
+        logWithTimestamp('ERROR', `Error handling ${method} request:`, error);
 
         // Handle specific error types
         if (error.message?.includes('token has been expired or revoked')) {
-            return NextResponse.json(
+            const response = NextResponse.json(
                 { error: 'Google Drive connection error', details: 'Your Google Drive connection has expired. Please reconnect in Settings.' },
                 { status: 401 }
             );
+
+            // Ensure we're sending JSON content type
+            response.headers.set('Content-Type', 'application/json');
+
+            return response;
         }
 
         // Default error handling
-        return NextResponse.json(
+        const response = NextResponse.json(
             {
                 error: 'Internal server error',
                 message: error.message,
@@ -125,27 +164,51 @@ async function handleRequest(
             },
             { status: 500 }
         );
+
+        // Ensure we're sending JSON content type
+        response.headers.set('Content-Type', 'application/json');
+
+        return response;
     }
 }
 
 // Main handler functions
 export async function GET(request: NextRequest, { params }: { params: { slug: string[] } }) {
     const slug = params.slug.join('/');
+
+    logWithTimestamp('GET', `Request received for path: ${slug}`, {
+        url: request.url,
+        headers: Object.fromEntries(request.headers),
+        params
+    });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
     logRequest('GET', slug, userId);
 
     const route = routes[slug];
+
     if (!route || !route.GET) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        logWithTimestamp('GET', `Route not found: ${slug}`);
+        const response = NextResponse.json({ error: 'Not found' }, { status: 404 });
+        response.headers.set('Content-Type', 'application/json');
+        return response;
     }
 
+    logWithTimestamp('GET', `Route found for ${slug}, handling request`);
     return handleRequest(request, 'GET', route.GET, route.requiresAuth || false);
 }
 
 export async function POST(request: NextRequest, { params }: { params: { slug: string[] } }) {
     const slug = params.slug.join('/');
+
+    logWithTimestamp('POST', `Request received for path: ${slug}`, {
+        url: request.url,
+        headers: Object.fromEntries(request.headers),
+        params
+    });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -153,7 +216,10 @@ export async function POST(request: NextRequest, { params }: { params: { slug: s
 
     const route = routes[slug];
     if (!route || !route.POST) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        logWithTimestamp('POST', `Route not found: ${slug}`);
+        const response = NextResponse.json({ error: 'Not found' }, { status: 404 });
+        response.headers.set('Content-Type', 'application/json');
+        return response;
     }
 
     return handleRequest(request, 'POST', route.POST, route.requiresAuth || false);
@@ -161,6 +227,12 @@ export async function POST(request: NextRequest, { params }: { params: { slug: s
 
 export async function DELETE(request: NextRequest, { params }: { params: { slug: string[] } }) {
     const slug = params.slug.join('/');
+
+    logWithTimestamp('DELETE', `Request received for path: ${slug}`, {
+        url: request.url,
+        params
+    });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -168,7 +240,10 @@ export async function DELETE(request: NextRequest, { params }: { params: { slug:
 
     const route = routes[slug];
     if (!route || !route.DELETE) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        logWithTimestamp('DELETE', `Route not found: ${slug}`);
+        const response = NextResponse.json({ error: 'Not found' }, { status: 404 });
+        response.headers.set('Content-Type', 'application/json');
+        return response;
     }
 
     return handleRequest(request, 'DELETE', route.DELETE, route.requiresAuth || false);
@@ -176,6 +251,12 @@ export async function DELETE(request: NextRequest, { params }: { params: { slug:
 
 export async function PUT(request: NextRequest, { params }: { params: { slug: string[] } }) {
     const slug = params.slug.join('/');
+
+    logWithTimestamp('PUT', `Request received for path: ${slug}`, {
+        url: request.url,
+        params
+    });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -183,7 +264,10 @@ export async function PUT(request: NextRequest, { params }: { params: { slug: st
 
     const route = routes[slug];
     if (!route || !route.PUT) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        logWithTimestamp('PUT', `Route not found: ${slug}`);
+        const response = NextResponse.json({ error: 'Not found' }, { status: 404 });
+        response.headers.set('Content-Type', 'application/json');
+        return response;
     }
 
     return handleRequest(request, 'PUT', route.PUT, route.requiresAuth || false);
@@ -191,6 +275,12 @@ export async function PUT(request: NextRequest, { params }: { params: { slug: st
 
 export async function PATCH(request: NextRequest, { params }: { params: { slug: string[] } }) {
     const slug = params.slug.join('/');
+
+    logWithTimestamp('PATCH', `Request received for path: ${slug}`, {
+        url: request.url,
+        params
+    });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -198,7 +288,10 @@ export async function PATCH(request: NextRequest, { params }: { params: { slug: 
 
     const route = routes[slug];
     if (!route || !route.PATCH) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 });
+        logWithTimestamp('PATCH', `Route not found: ${slug}`);
+        const response = NextResponse.json({ error: 'Not found' }, { status: 404 });
+        response.headers.set('Content-Type', 'application/json');
+        return response;
     }
 
     return handleRequest(request, 'PATCH', route.PATCH, route.requiresAuth || false);

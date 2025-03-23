@@ -4,45 +4,78 @@ import { auth } from '@clerk/nextjs/server';
 import { getGoogleRefreshToken, saveGoogleToken } from '@/lib/clerkAuth';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 
+// Add detailed logging helper
+function logWithTimestamp(handler: string, message: string, data?: any) {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}][API][auth/${handler}] ${message}`, data ? data : '');
+}
+
 /**
  * Get current user and Google Drive connection status
  */
-export async function getMe(request: NextRequest) {
-    const authResult = await auth();
-    const userId = authResult.userId;
+export async function getMe(request: NextRequest): Promise<NextResponse> {
+    logWithTimestamp('AUTH', 'getMe called', { url: request.url });
 
-    if (!userId) {
-        return NextResponse.json(
-            { connected: false, message: 'User is not authenticated' },
-            { status: 401 }
-        );
-    }
-
-    // Get the user's Google refresh token
-    const refreshToken = await getGoogleRefreshToken(userId);
-
-    if (!refreshToken) {
-        return NextResponse.json({
-            connected: false,
-            message: 'User has not connected Google Drive',
-            userId
-        });
-    }
-
-    // Verify the Google Drive connection
     try {
-        const isConnected = await googleDriveService.checkConnection(refreshToken);
-        return NextResponse.json({
-            connected: isConnected,
-            message: isConnected ? 'Connected to Google Drive' : 'Google Drive connection failed',
-            userId
-        });
-    } catch (driveError: any) {
-        return NextResponse.json({
-            connected: false,
-            message: driveError.message || 'Error checking Google Drive connection',
-            userId
-        });
+        const authResult = await auth();
+        logWithTimestamp('AUTH', 'Auth result', { auth: !!authResult });
+
+        const userId = authResult.userId;
+
+        if (!userId) {
+            logWithTimestamp('AUTH', 'No userId found', { auth: authResult });
+            return NextResponse.json(
+                { authenticated: false, message: "Not authenticated" },
+                { status: 401, headers: { 'Content-Type': 'application/json' } }
+            );
+        }
+
+        logWithTimestamp('AUTH', `User authenticated: ${userId}`);
+
+        // Get the user's Google refresh token
+        const refreshToken = await getGoogleRefreshToken(userId);
+        logWithTimestamp('AUTH', `Refresh token found: ${!!refreshToken}`);
+
+        if (!refreshToken) {
+            return NextResponse.json({
+                connected: false,
+                message: 'User has not connected Google Drive',
+                userId
+            });
+        }
+
+        // Verify the Google Drive connection
+        try {
+            logWithTimestamp('AUTH', 'Checking Google Drive connection');
+            const isConnected = await googleDriveService.checkConnection(refreshToken);
+            logWithTimestamp('AUTH', `Drive connection check result: ${isConnected}`);
+
+            const response = NextResponse.json({
+                connected: isConnected,
+                message: isConnected ? 'Connected to Google Drive' : 'Google Drive connection failed',
+                userId
+            });
+
+            logWithTimestamp('AUTH', 'Sending response', {
+                status: response.status,
+                headers: Object.fromEntries(response.headers.entries())
+            });
+
+            return response;
+        } catch (driveError: any) {
+            logWithTimestamp('AUTH', 'Error checking Drive connection', driveError);
+            return NextResponse.json({
+                connected: false,
+                message: driveError.message || 'Error checking Google Drive connection',
+                userId
+            });
+        }
+    } catch (error) {
+        logWithTimestamp('ERROR', 'Error in getMe', { error });
+        return NextResponse.json(
+            { error: `Error checking authentication: ${error}` },
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
     }
 }
 
@@ -50,10 +83,13 @@ export async function getMe(request: NextRequest) {
  * Check Google Drive connection status
  */
 export async function getGoogleStatus(request: NextRequest) {
+    logWithTimestamp('getGoogleStatus', 'Handler called', { url: request.url });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
     if (!userId) {
+        logWithTimestamp('getGoogleStatus', 'User not authenticated');
         return NextResponse.json(
             { connected: false, message: 'User is not authenticated' },
             { status: 401 }
@@ -92,6 +128,8 @@ export async function getGoogleStatus(request: NextRequest) {
  * Generate a Google auth URL for OAuth flow
  */
 export async function getGoogleAuthUrl(request: NextRequest) {
+    logWithTimestamp('getGoogleAuthUrl', 'Handler called', { url: request.url });
+
     try {
         const authResult = await auth();
         const userId = authResult.userId;
@@ -123,6 +161,8 @@ export async function getGoogleAuthUrl(request: NextRequest) {
  * Exchange OAuth code for tokens
  */
 export async function exchangeCode(request: NextRequest) {
+    logWithTimestamp('exchangeCode', 'Handler called', { url: request.url });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -178,6 +218,8 @@ export async function exchangeCode(request: NextRequest) {
  * Disconnect Google Drive
  */
 export async function disconnectGoogle(request: NextRequest) {
+    logWithTimestamp('disconnectGoogle', 'Handler called', { url: request.url });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -204,6 +246,8 @@ export async function disconnectGoogle(request: NextRequest) {
  * Create a session
  */
 export async function createSession(request: NextRequest) {
+    logWithTimestamp('createSession', 'Handler called', { url: request.url });
+
     try {
         // Session creation logic would go here
         return NextResponse.json({
@@ -219,6 +263,8 @@ export async function createSession(request: NextRequest) {
  * Get user details
  */
 export async function getUser(request: NextRequest) {
+    logWithTimestamp('getUser', 'Handler called', { url: request.url });
+
     const authResult = await auth();
     const userId = authResult.userId;
 
@@ -245,6 +291,8 @@ export async function getUser(request: NextRequest) {
  * Logout user
  */
 export async function logout(request: NextRequest) {
+    logWithTimestamp('logout', 'Handler called', { url: request.url });
+
     try {
         // Logout logic would go here
         return NextResponse.json({
