@@ -1,19 +1,18 @@
-Architectural Analysis (High-Level)
-Authentication and Sessions
+# Application Documentation
 
-Uses Clerk for user management and session handling (including OAuth flows).
+## Architectural Analysis (High-Level)
 
-Provides endpoints (/api/auth/...) that handle:
+### Authentication and Sessions
 
-Exchanging Google OAuth codes for tokens.
+- Uses Clerk for user management and session handling (including OAuth flows).
+- Provides centralized API endpoints through a unified router that handle:
+  - Exchanging Google OAuth codes for tokens
+  - Storing refresh tokens in Clerk metadata
+  - Checking/disconnecting the Google integration
+  - Retrieving session/user information
+- Current authentication flow experiences 401 errors that are being addressed (see Project Milestones)
 
-Storing refresh tokens in either Clerk metadata or a local DB.
-
-Checking/disconnecting the Google integration.
-
-Retrieving session/user information.
-
-Google Drive Integration
+### Google Drive Integration
 
 The app obtains a user's Google OAuth refresh token and uses it to store/retrieve recordings on their personal Google Drive.
 
@@ -31,56 +30,60 @@ Files are structured in a parent "StageVault Recordings" directory, with nested 
 
 The UI surfaces "Connected" vs. "Not Connected" states for Drive and allows the user to connect/disconnect.
 
-Core Data Entities & Flows
+### API Structure
 
-Performances → can have multiple Rehearsals → each Rehearsal can have multiple Recordings.
+- All API routes have been consolidated into a unified router file using Next.js catch-all routes
+- This centralized approach improves debugging capabilities and maintenance
+- API endpoints handle authentication, Google Drive operations, and data management
+- Common error handling and authentication verification is applied consistently across endpoints
 
-Endpoints and UI components coordinate the creation, update, and deletion of these items.
+### Core Data Entities & Flows
 
-Local metadata is stored (e.g., performanceId, rehearsalId, recordingId) to keep track of the Google Drive folder structure and file references.
+- **Performances** → can have multiple **Rehearsals** → each Rehearsal can have multiple **Recordings**
+- Endpoints and UI components coordinate the creation, update, and deletion of these items
+- Local metadata is stored (e.g., performanceId, rehearsalId, recordingId) to keep track of the Google Drive folder structure and file references
+- SyncService handles the synchronization of recordings to Google Drive
 
-UI/UX
+### UI/UX
 
-Built on Next.js with React and Clerk's out-of-the-box components for sign-up/sign-in flows.
+- Built on Next.js with React and Clerk's out-of-the-box components for sign-up/sign-in flows
+- Main functionality includes:
+  - Capturing video via the browser (camera input)
+  - Uploading that captured video and optional thumbnail to Google Drive
+  - Searching/filtering performances, listing recordings, playing them (via a video player)
+- TailwindCSS is used for styling, with consistent implementation of utility classes
 
-Main functionality includes:
+## File/Folder Structure (Next.js App Router)
 
-Capturing video via the browser (camera input).
+- **/app/**: Page routes using Next.js App Router
+- **/app/api/[...slug]/route.ts**: Unified API router that handles all API requests
+- **/components/**: UI building blocks (dialog, forms, video recorder, etc.)
+- **/lib/**: Shared logic, including:
+  - **GoogleDriveService.ts**: Centralized Google Drive functionality
+  - Auth helpers, DB connections, and other utility services
+- **/contexts/**: React context providers (e.g., PerformanceContext, GoogleDriveContext)
 
-Uploading that captured video and optional thumbnail to Google Drive.
+## Current Development Focus
 
-Searching/filtering performances, listing recordings, playing them (via a video player).
+The application is currently addressing authentication flow issues that cause 401 Unauthorized errors during the recording upload process. This involves:
 
-TailwindCSS is used for styling, though there are also custom utility classes.
+1. Fixing how Clerk authentication tokens are passed to API routes
+2. Ensuring consistent auth header handling
+3. Implementing proper error recovery mechanisms
+4. Improving user feedback when authentication issues occur
 
-File/Folder Structure (Next.js App Router)
+See the project milestones document for detailed information about the current fix implementation plan.
 
-/app/ folder for page routes.
+## Overall Application Flow
 
-/app/api/ for serverless API endpoints (Next.js Route Handlers).
+1. User logs in (via Google or standard Clerk sign-in)
+2. User creates or selects a Performance → Rehearsal → Recording
+3. User records a video or uploads one
+4. Video and metadata are automatically saved to the user's Google Drive
+5. On re-login, user can see existing data from Google Drive (and metadata stored in Clerk)
 
-/components/ for UI building blocks (dialog, forms, video recorder, etc.).
+## Known Issues
 
-/lib/ for shared logic (auth helpers, DB connections, Google API wrappers).
-
-/contexts/ for React context providers (e.g., PerformanceContext, GoogleDriveContext).
-
-Next.js & Clerk Integration
-
-The repository employs both Next.js's App Router and Clerk's server/client hooks to manage protected routes.
-
-Some logic for ensuring the user is authenticated uses <SignedIn> and <SignedOut> from Clerk on the client side, and server-side checks in the API routes.
-
-Overall Purpose & Flow
-
-This codebase is aimed at a PoC where a user:
-
-Logs in (via Google or standard Clerk sign-in).
-
-Creates or selects a Performance → Rehearsal → Recording.
-
-Records a video or uploads one.
-
-Automatically saves the video and its metadata into the user's Google Drive.
-
-On re-login, the user can see their existing data from Google Drive (and local or Clerk metadata).
+- Authentication flow occasionally fails with 401 errors when uploading recordings
+- Fallback to performanceId when user authentication fails creates potential security concerns
+- Error handling for authentication failures needs improvement

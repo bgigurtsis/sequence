@@ -63,6 +63,13 @@ const routes: Record<string, RouteHandler> = {
         POST: AuthHandlers.logout,
         requiresAuth: true
     },
+    'auth/refresh-session': {
+        GET: AuthHandlers.refreshSession,
+        requiresAuth: true,
+        config: {
+            runtime: 'edge'
+        }
+    },
 
     // Upload routes
     'upload': {

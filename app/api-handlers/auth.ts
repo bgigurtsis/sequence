@@ -18,14 +18,14 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
 
     try {
         const authResult = await auth();
-        logWithTimestamp('AUTH', 'Auth result', { auth: !!authResult });
+        logWithTimestamp('AUTH', 'Auth result', { auth: !!authResult, userId: authResult.userId });
 
         const userId = authResult.userId;
 
         if (!userId) {
             logWithTimestamp('AUTH', 'No userId found', { auth: authResult });
             return NextResponse.json(
-                { authenticated: false, message: "Not authenticated" },
+                { authenticated: false, error: "Authentication required" },
                 { status: 401, headers: { 'Content-Type': 'application/json' } }
             );
         }
@@ -36,44 +36,52 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
         const refreshToken = await getGoogleRefreshToken(userId);
         logWithTimestamp('AUTH', `Refresh token found: ${!!refreshToken}`);
 
-        if (!refreshToken) {
-            return NextResponse.json({
-                connected: false,
-                message: 'User has not connected Google Drive',
-                userId
-            });
+        // Always return the userId regardless of connection status
+        const response = NextResponse.json({
+            authenticated: true,
+            userId: userId,
+            connected: !!refreshToken,
+            message: refreshToken
+                ? 'User has connected Google Drive'
+                : 'User has not connected Google Drive'
+        });
+
+        // If refresh token exists, check the connection
+        if (refreshToken) {
+            try {
+                logWithTimestamp('AUTH', 'Checking Google Drive connection');
+                const isConnected = await googleDriveService.checkConnection(refreshToken);
+                logWithTimestamp('AUTH', `Drive connection check result: ${isConnected}`);
+
+                // Update the response with connection status
+                return NextResponse.json({
+                    authenticated: true,
+                    userId: userId,
+                    connected: isConnected,
+                    message: isConnected ? 'Connected to Google Drive' : 'Google Drive connection failed'
+                });
+            } catch (driveError: any) {
+                logWithTimestamp('AUTH', 'Error checking Drive connection', driveError);
+                // Still return userId even if Drive connection fails
+                return NextResponse.json({
+                    authenticated: true,
+                    userId: userId,
+                    connected: false,
+                    message: driveError.message || 'Error checking Google Drive connection'
+                });
+            }
         }
 
-        // Verify the Google Drive connection
-        try {
-            logWithTimestamp('AUTH', 'Checking Google Drive connection');
-            const isConnected = await googleDriveService.checkConnection(refreshToken);
-            logWithTimestamp('AUTH', `Drive connection check result: ${isConnected}`);
+        logWithTimestamp('AUTH', 'Sending response', {
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries())
+        });
 
-            const response = NextResponse.json({
-                connected: isConnected,
-                message: isConnected ? 'Connected to Google Drive' : 'Google Drive connection failed',
-                userId
-            });
-
-            logWithTimestamp('AUTH', 'Sending response', {
-                status: response.status,
-                headers: Object.fromEntries(response.headers.entries())
-            });
-
-            return response;
-        } catch (driveError: any) {
-            logWithTimestamp('AUTH', 'Error checking Drive connection', driveError);
-            return NextResponse.json({
-                connected: false,
-                message: driveError.message || 'Error checking Google Drive connection',
-                userId
-            });
-        }
+        return response;
     } catch (error) {
         logWithTimestamp('ERROR', 'Error in getMe', { error });
         return NextResponse.json(
-            { error: `Error checking authentication: ${error}` },
+            { authenticated: false, error: `Error checking authentication: ${error}` },
             { status: 500, headers: { 'Content-Type': 'application/json' } }
         );
     }
@@ -301,5 +309,42 @@ export async function logout(request: NextRequest) {
         });
     } catch (error) {
         throw error;
+    }
+}
+
+/**
+ * Refresh the authentication session
+ * This endpoint allows the client to refresh the session without a full sign-in
+ */
+export async function refreshSession(request: NextRequest): Promise<NextResponse> {
+    logWithTimestamp('refreshSession', 'Handler called', { url: request.url });
+
+    try {
+        const authResult = await auth();
+        const userId = authResult.userId;
+
+        if (!userId) {
+            logWithTimestamp('refreshSession', 'No userId found, session expired');
+            return NextResponse.json(
+                { success: false, message: 'Session expired' },
+                { status: 401, headers: { 'Content-Type': 'application/json' } }
+            );
+        }
+
+        // Check if the session is still valid by getting the user data
+        logWithTimestamp('refreshSession', `User authenticated: ${userId}`);
+
+        // Return success with the user ID for client caching
+        return NextResponse.json({
+            success: true,
+            message: 'Session refreshed successfully',
+            userId: userId
+        });
+    } catch (error) {
+        logWithTimestamp('ERROR', 'Error in refreshSession', { error });
+        return NextResponse.json(
+            { success: false, message: `Error refreshing session: ${error}` },
+            { status: 500, headers: { 'Content-Type': 'application/json' } }
+        );
     }
 } 

@@ -239,7 +239,76 @@ class SyncService {
     }, 60000); // Check every minute
   }
 
-  public queueRecording(
+  // Validate authentication before queueing a recording
+  private async validateAuthForUpload(): Promise<boolean> {
+    try {
+      // Check if we've confirmed authentication recently (within the last minute)
+      const lastCheck = sessionStorage.getItem('lastAuthCheck');
+      if (lastCheck) {
+        const lastCheckTime = new Date(lastCheck).getTime();
+        const now = new Date().getTime();
+        const oneMinute = 60 * 1000;
+
+        // If we've checked auth recently, don't check again
+        if (now - lastCheckTime < oneMinute) {
+          return true;
+        }
+      }
+
+      logWithTimestamp('AUTH', 'Validating authentication for upload');
+
+      const response = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          // Add cache control to prevent browsers from caching the response
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+
+      if (!response.ok) {
+        logWithTimestamp('AUTH', `Authentication validation failed: ${response.status}`);
+
+        if (response.status === 401) {
+          // Check if we've already shown an auth error in the last minute to prevent spam
+          const lastAuthError = sessionStorage.getItem('lastAuthError');
+          const now = new Date().getTime();
+
+          if (!lastAuthError || now - new Date(lastAuthError).getTime() > 60000) {
+            // Store the error time to prevent multiple alerts
+            sessionStorage.setItem('lastAuthError', new Date().toISOString());
+
+            logWithTimestamp('AUTH', 'User needs to sign in, redirecting');
+            // Alert the user and redirect to sign-in
+            alert('Your session has expired. Please sign in again to upload recordings.');
+            // Use window.location for a full page reload to clear any stale state
+            window.location.href = '/sign-in';
+          }
+          return false;
+        }
+
+        return false;
+      }
+
+      const data = await response.json();
+
+      if (data.authenticated) {
+        // Store the successful auth check time
+        sessionStorage.setItem('lastAuthCheck', new Date().toISOString());
+      }
+
+      logWithTimestamp('AUTH', `Authentication validated: ${!!data.authenticated}`);
+      return !!data.authenticated;
+    } catch (error: any) {
+      logWithTimestamp('AUTH', `Error validating authentication: ${error.message}`);
+      return false;
+    }
+  }
+
+  public async queueRecording(
     performanceId: string,
     performanceTitle: string,
     rehearsalId: string,
@@ -247,6 +316,13 @@ class SyncService {
     thumbnail: Blob,
     metadata: any
   ) {
+    // Validate authentication before proceeding
+    const isAuthenticated = await this.validateAuthForUpload();
+    if (!isAuthenticated) {
+      logWithTimestamp('QUEUE', 'Cannot queue recording: Authentication failed');
+      return;
+    }
+
     // Try to get the current user ID to store with the item
     let userId: string | undefined;
 
@@ -338,143 +414,189 @@ class SyncService {
   }
 
   public async sync() {
-    if (this.state.isSyncing || !this.state.isOnline) {
-      logWithTimestamp('SYNC', `Sync aborted: ${this.state.isSyncing ? 'Already syncing' : 'Offline'}`);
+    if (this.state.isSyncing) {
+      logWithTimestamp('SYNC', 'Sync already in progress, skipping');
       return;
     }
-
-    if (this.state.queue.length === 0) {
-      logWithTimestamp('SYNC', 'Nothing to sync');
-      return;
-    }
-
-    this.state.isSyncing = true;
-    this.notifyListeners();
-    logWithTimestamp('SYNC', 'Starting sync process');
 
     try {
-      // 1) Get user ID from /api/auth/me
-      logWithTimestamp('SYNC', 'Making fetch request to /api/auth/me');
-      const userResponse = await fetch('/api/auth/me', {
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
+      this.state.isSyncing = true;
+      this.notifyListeners();
 
-      logWithTimestamp('SYNC', `User response status: ${userResponse.status} ${userResponse.statusText}`);
-      logWithTimestamp('SYNC', 'Response headers:', Object.fromEntries(userResponse.headers.entries()));
-
-      // Check content type to ensure we're getting JSON
-      {
-        const contentType = userResponse.headers.get('content-type');
-        logWithTimestamp('SYNC', `Content-Type of response: ${contentType}`);
-
-        if (!contentType || !contentType.includes('application/json')) {
-          const htmlResponse = await userResponse.text();
-          logWithTimestamp('SYNC', 'API returned non-JSON content:', htmlResponse.substring(0, 500) + '...');
-          throw new Error('API returned HTML instead of JSON');
-        }
+      // Process any pending items
+      const pendingItems = this.state.queue.filter(item => item.status === 'pending');
+      if (pendingItems.length === 0) {
+        logWithTimestamp('SYNC', 'No pending items to sync');
+        this.state.isSyncing = false;
+        this.notifyListeners();
+        return;
       }
 
-      const userData = await userResponse.json();
-      logWithTimestamp('SYNC', 'User data received:', userData);
+      logWithTimestamp('SYNC', `Starting sync for ${pendingItems.length} pending items`);
 
-      let userId = userData.userId;
+      // Process one item at a time
+      const itemToSync = pendingItems[0];
 
-      if (!userId) {
-        // Try getting userId from the first item in queue
-        const firstItem = this.state.queue[0];
-        if (firstItem?.userId) {
-          userId = firstItem.userId;
-          logWithTimestamp('SYNC', 'Using userId from queue item:', userId);
-        } else if (firstItem?.performanceId) {
-          // Fallback if absolutely necessary (not recommended):
-          userId = firstItem.performanceId.split('-')[0];
-          logWithTimestamp('SYNC', '⚠️ No user ID found, using performanceId as fallback:', firstItem.performanceId);
-        } else {
-          throw new Error('No user ID available for sync');
-        }
-      }
+      // Update status
+      this.updateItemStatus(itemToSync.id, 'in-progress');
 
-      logWithTimestamp('SYNC', 'Final user ID for sync:', userId);
+      // Check if we have a cached userId in session storage
+      const cachedUserId = sessionStorage.getItem('userId');
+      let userId = null;
 
-      // 2) Process each item in the queue
-      for (const item of this.state.queue) {
-        if (!item) continue;
-
-        logWithTimestamp('SYNC', `Uploading recording ${item.id} for user ${userId}`);
-
-        // Create FormData for the upload
-        const formData = new FormData();
-        formData.append('recordingId', item.id);
-        formData.append('performanceId', item.performanceId);
-        formData.append('performanceTitle', item.performanceTitle || '');
-        formData.append('userId', userId);
-
-        if (item.video) {
-          formData.append('video', item.video);
-        }
-        if (item.thumbnail) {
-          formData.append('thumbnail', item.thumbnail);
-        }
-
-        // Add metadata as JSON string
-        const metadata = {
-          ...item,
-          video: undefined,
-          thumbnail: undefined,
-          videoSize: item.video ? item.video.size : undefined,
-          thumbnailSize: item.thumbnail ? item.thumbnail.size : undefined
-        };
-        formData.append('metadataString', JSON.stringify(metadata));
-
-        // 3) Upload to form endpoint
-        logWithTimestamp('SYNC', 'Making POST request to /api/upload/form');
-        const uploadResponse = await fetch('/api/upload/form', {
-          method: 'POST',
+      if (cachedUserId) {
+        logWithTimestamp('SYNC', `Using cached userId: ${cachedUserId}`);
+        userId = cachedUserId;
+      } else {
+        // 1) Get user ID from /api/auth/me
+        logWithTimestamp('SYNC', 'Making fetch request to /api/auth/me');
+        const userResponse = await fetch('/api/auth/me', {
+          method: 'GET',
+          credentials: 'include',
           headers: {
-            'Accept': 'application/json'
-          },
-          body: formData
+            'Content-Type': 'application/json',
+            // Add cache control headers
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
         });
 
-        logWithTimestamp('SYNC', `Upload response status: ${uploadResponse.status} ${uploadResponse.statusText}`);
-        logWithTimestamp('SYNC', 'Upload response headers:', Object.fromEntries(uploadResponse.headers.entries()));
+        logWithTimestamp('SYNC', `User response status: ${userResponse.status} ${userResponse.statusText}`);
 
-        // Check content type to ensure we're getting JSON
-        {
-          const uploadContentType = uploadResponse.headers.get('content-type');
-          logWithTimestamp('SYNC', `Content-Type of upload response: ${uploadContentType}`);
+        if (userResponse.ok) {
+          const userData = await userResponse.json();
+          logWithTimestamp('SYNC', `User data received: ${JSON.stringify(userData)}`);
 
-          if (!uploadContentType || !uploadContentType.includes('application/json')) {
-            const htmlResponse = await uploadResponse.text();
-            logWithTimestamp('SYNC', 'Received non-JSON response from upload endpoint:', htmlResponse.substring(0, 500) + '...');
-            throw new Error('Server returned HTML instead of JSON');
+          if (userData.userId) {
+            userId = userData.userId;
+            // Cache userId for future use
+            sessionStorage.setItem('userId', userId);
+            logWithTimestamp('SYNC', `Got user ID: ${userId}`);
+          } else {
+            logWithTimestamp('SYNC', 'User data received, but no userId found', userData);
+          }
+        } else {
+          const errorData = await userResponse.json();
+          logWithTimestamp('SYNC', `Authentication error: ${JSON.stringify(errorData)}`);
+
+          // Check if we need to redirect to sign-in
+          if (userResponse.status === 401) {
+            // Check if we've already shown an auth error recently to prevent spam
+            const lastAuthError = sessionStorage.getItem('lastAuthError');
+            const now = new Date().getTime();
+
+            if (!lastAuthError || now - new Date(lastAuthError).getTime() > 60000) {
+              // Store the error time to prevent multiple alerts
+              sessionStorage.setItem('lastAuthError', new Date().toISOString());
+
+              logWithTimestamp('SYNC', 'Authentication required, user needs to sign in');
+              this.state.isSyncing = false;
+              this.notifyListeners();
+
+              // Display a user-facing error
+              alert('Your session has expired. Please sign in again to continue uploading recordings.');
+
+              // Redirect to sign-in
+              window.location.href = '/sign-in';
+              return;
+            } else {
+              logWithTimestamp('SYNC', 'Auth error already shown recently, not showing again');
+              this.state.isSyncing = false;
+              this.notifyListeners();
+              return;
+            }
           }
         }
-
-        const result = await uploadResponse.json();
-        logWithTimestamp('SYNC', 'Upload result:', result);
-
-        if (!uploadResponse.ok) {
-          throw new Error(result.error || 'Upload failed');
-        }
-
-        // Remove successful upload from queue
-        logWithTimestamp('SYNC', `Upload successful for item ${item.id}, removing from queue`);
-        this.state.queue = this.state.queue.filter(qItem => qItem?.id !== item.id);
-        this.state.lastSuccess = new Date().toISOString();
-        this.saveToStorage();
       }
 
-      logWithTimestamp('SYNC', 'Sync completed successfully');
-    } catch (error) {
-      logWithTimestamp('SYNC', 'Sync error:', error instanceof Error ? error.message : String(error));
-      throw error; // Ensure the error surfaces
+      // If no userId, use performanceId as fallback (only for this upload session)
+      if (!userId) {
+        logWithTimestamp('SYNC', `⚠️ No user ID found, using performanceId as fallback: ${itemToSync.performanceId}`);
+        userId = itemToSync.performanceId.substring(0, 4); // Use a prefix of the performance ID
+      }
+
+      logWithTimestamp('SYNC', `Final user ID for sync: ${userId}`);
+
+      // Create form data for the upload
+      const formData = new FormData();
+      formData.append('userId', userId);
+      formData.append('performanceId', itemToSync.performanceId);
+      formData.append('performanceTitle', itemToSync.performanceTitle);
+      formData.append('rehearsalId', itemToSync.rehearsalId);
+      formData.append('recordingId', itemToSync.id);
+      formData.append('metadata', JSON.stringify(itemToSync.metadata));
+      formData.append('video', itemToSync.video);
+      formData.append('thumbnail', itemToSync.thumbnail);
+
+      logWithTimestamp('SYNC', `Uploading recording ${itemToSync.id} for user ${userId}`);
+      logWithTimestamp('SYNC', 'Making POST request to /api/upload/form');
+
+      const uploadResponse = await fetch('/api/upload/form', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+        // Don't set Content-Type header here - the browser will set it correctly with the multipart boundary
+      });
+
+      logWithTimestamp('SYNC', `Upload response status: ${uploadResponse.status} ${uploadResponse.statusText}`);
+
+      const uploadResult = await uploadResponse.json();
+      logWithTimestamp('SYNC', `Upload result: ${JSON.stringify(uploadResult)}`);
+
+      if (!uploadResponse.ok) {
+        // Handle authentication errors specifically
+        if (uploadResponse.status === 401) {
+          // Check if we've already shown an auth error recently
+          const lastAuthError = sessionStorage.getItem('lastAuthError');
+          const now = new Date().getTime();
+
+          if (!lastAuthError || now - new Date(lastAuthError).getTime() > 60000) {
+            // Store the error time to prevent multiple alerts
+            sessionStorage.setItem('lastAuthError', new Date().toISOString());
+
+            logWithTimestamp('SYNC', 'Authentication required for upload, user needs to sign in');
+            this.state.isSyncing = false;
+            this.notifyListeners();
+
+            // Clear cached userId as it's no longer valid
+            sessionStorage.removeItem('userId');
+
+            // Display a user-facing error
+            alert('Your session has expired. Please sign in again to continue uploading recordings.');
+
+            // Redirect to sign-in
+            window.location.href = '/sign-in';
+          } else {
+            logWithTimestamp('SYNC', 'Auth error already shown recently, not showing again');
+            this.state.isSyncing = false;
+            this.notifyListeners();
+          }
+
+          throw new Error(uploadResult.error || 'Authentication required');
+        }
+
+        // For other errors, mark as failed and retry later
+        this.updateItemFailure(itemToSync.id, uploadResult.error || 'Unknown error uploading recording');
+        throw new Error(uploadResult.error || 'Error uploading recording');
+      }
+
+      // Success - mark item as completed
+      logWithTimestamp('SYNC', `Upload successful for recording ${itemToSync.id}`);
+      this.updateItemStatus(itemToSync.id, 'completed');
+
+      // Update last success timestamp
+      this.state.lastSuccess = new Date().toISOString();
+    } catch (error: any) {
+      logWithTimestamp('SYNC', `Sync error: ${error.message}`);
+      // Note: Individual item failures are handled within the try block
+      throw error;
     } finally {
+      // Update last sync timestamp and save state
       this.state.lastSync = new Date().toISOString();
       this.state.isSyncing = false;
       this.notifyListeners();
+      this.saveToStorage();
     }
   }
 
@@ -577,40 +699,39 @@ class SyncService {
 
   async getUserId(): Promise<string | null> {
     try {
-      this.logWithTimestamp('AUTH', 'Fetching user ID from /api/auth/me');
+      logWithTimestamp('AUTH', 'Fetching user ID from /api/auth/me');
 
-      const response = await fetch('/api/auth/me', {
+      // Update fetch to include credentials
+      const userResponse = await fetch('/api/auth/me', {
         method: 'GET',
+        credentials: 'include',
         headers: {
-          'Accept': 'application/json',
           'Content-Type': 'application/json'
-        },
-        credentials: 'include'
+        }
       });
 
-      this.logWithTimestamp('AUTH', `Response from /api/auth/me - Status: ${response.status} ${response.statusText}`);
-      this.logWithTimestamp('AUTH', `Response headers:`, Object.fromEntries(response.headers.entries()));
+      logWithTimestamp('AUTH', `Response from /api/auth/me - Status: ${userResponse.status} ${userResponse.statusText}`);
 
-      // Check if response is actually JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        // If not JSON, get the text to see what was returned
-        const body = await response.text();
-        this.logWithTimestamp('AUTH', `Error: Expected JSON, got: ${contentType}`, { bodyPreview: body.substring(0, 200) });
-        throw new Error(`Expected JSON, got: ${contentType}`);
-      }
+      if (!userResponse.ok) {
+        if (userResponse.status === 401) {
+          logWithTimestamp('AUTH', 'Authentication required, no user ID found');
+          return null;
+        }
 
-      const data = await response.json();
-
-      if (!data.authenticated) {
-        this.logWithTimestamp('AUTH', 'User not authenticated', { data });
+        logWithTimestamp('AUTH', `Error fetching user ID: ${userResponse.status}`);
         return null;
       }
 
-      this.logWithTimestamp('AUTH', 'Successfully retrieved user ID', { userId: data.userId });
-      return data.userId;
-    } catch (error) {
-      this.logWithTimestamp('AUTH', `Could not get user ID: ${error.message}`);
+      const userData = await userResponse.json();
+
+      if (!userData.userId) {
+        logWithTimestamp('AUTH', 'No userId returned from /api/auth/me', userData);
+        return null;
+      }
+
+      return userData.userId;
+    } catch (error: any) {
+      logWithTimestamp('AUTH', `Error fetching user ID: ${error.message}`);
       return null;
     }
   }

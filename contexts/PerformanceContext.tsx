@@ -23,21 +23,21 @@ interface PerformanceContextType {
   recordingTargetRehearsalId: string | null;
   preRecordingMetadata: Metadata | null;
   videoToWatch: { recording: Recording; videoUrl: string } | null;
-  
+
   // Add these missing state setters
   setShowRecorder: (show: boolean) => void;
   setPreRecordingMetadata: (metadata: Metadata | null) => void;
   setRecordingTargetRehearsalId: (id: string | null) => void;
-  
+
   // Computed Properties
   selectedPerformance: Performance | undefined;
   filteredRecordings: Recording[];
   todaysRecordings: Recording[];
-  
+
   // Actions
   setSearchQuery: (query: string) => void;
   setSelectedPerformanceId: (id: string) => void;
-  
+
   // Modal Controls
   openRecorder: () => void;
   closeRecorder: () => void;
@@ -51,7 +51,7 @@ interface PerformanceContextType {
   closeRehearsalForm: () => void;
   openVideoPlayer: (recording: Recording) => void;
   closeVideoPlayer: () => void;
-  
+
   // CRUD Operations
   addPerformance: (data: { title: string; defaultPerformers: string[] }) => void;
   updatePerformance: (data: { title: string; defaultPerformers: string[] }) => void;
@@ -69,10 +69,10 @@ interface PerformanceContextType {
   deleteCollection: (id: string) => void;
   addToCollection: (collectionId: string, recordingId: string) => void;
   removeFromCollection: (collectionId: string, recordingId: string) => void;
-  
+
   // State setters
   setPerformances: React.Dispatch<React.SetStateAction<Performance[]>>;
-  
+
   // New properties
   handleExternalVideoLink: (metadata: Metadata & { externalUrl: string }) => void;
 }
@@ -144,7 +144,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   const todaysRecordings = useMemo(() => {
     const today = new Date().toISOString().split('T')[0]; // Format as YYYY-MM-DD
     const result: Recording[] = [];
-    
+
     performances.forEach(performance => {
       performance.rehearsals.forEach(rehearsal => {
         if (rehearsal.date === today) {
@@ -156,17 +156,17 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
       });
     });
-    
+
     return result;
   }, [performances]);
 
   // Filter recordings based on search query
   const filteredRecordings = useMemo(() => {
     if (!searchQuery.trim() || !selectedPerformance) return [];
-    
+
     const result: Recording[] = [];
     const query = searchQuery.toLowerCase();
-    
+
     selectedPerformance.rehearsals.forEach(rehearsal => {
       rehearsal.recordings.forEach(recording => {
         if (
@@ -181,7 +181,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
       });
     });
-    
+
     return result;
   }, [selectedPerformance, searchQuery]);
 
@@ -191,27 +191,27 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     setShowRecorder(false);
     setRecordingTargetRehearsalId(null);
   };
-  
+
   const openPreRecordingMetadata = (rehearsalId: string) => {
     setRecordingTargetRehearsalId(rehearsalId);
     setShowPreRecordingMetadataForm(true);
   };
-  
+
   const closePreRecordingMetadata = () => {
     setShowPreRecordingMetadataForm(false);
     setRecordingTargetRehearsalId(null);
   };
-  
+
   const openMetadataForm = (rehearsalId: string, recording: Recording) => {
     setEditingRecording({ rehearsalId, recording });
     setShowMetadataForm(true);
   };
-  
+
   const closeMetadataForm = () => {
     setShowMetadataForm(false);
     setEditingRecording(null);
   };
-  
+
   const openPerformanceForm = (performance?: Performance) => {
     if (performance) {
       setEditingPerformance(performance);
@@ -220,12 +220,12 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
     setShowPerformanceForm(true);
   };
-  
+
   const closePerformanceForm = () => {
     setShowPerformanceForm(false);
     setEditingPerformance(null);
   };
-  
+
   const openRehearsalForm = (performanceId: string, rehearsal?: Rehearsal) => {
     if (rehearsal) {
       setEditingRehearsal({ performanceId, rehearsal });
@@ -234,16 +234,16 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
     setShowRehearsalForm(true);
   };
-  
+
   const closeRehearsalForm = () => {
     setShowRehearsalForm(false);
     setEditingRehearsal(null);
   };
-  
+
   const openVideoPlayer = (recording: Recording) => {
     setVideoToWatch({ recording, videoUrl: recording.videoUrl });
   };
-  
+
   const closeVideoPlayer = () => {
     setVideoToWatch(null);
   };
@@ -251,30 +251,30 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Pre-recording metadata handler
   const handlePreRecordingMetadataSubmit = (metadata: Metadata) => {
     console.log('Pre-recording metadata submitted:', metadata);
-    
+
     // Ensure rehearsalId is set
     if (!metadata.rehearsalId) {
       console.error('Missing rehearsalId in metadata');
       return;
     }
-    
+
     // Find the rehearsal to validate it exists
     const performanceId = findPerformanceIdByRehearsalId(metadata.rehearsalId);
     const performance = performances.find(p => p.id === performanceId);
-    
+
     if (!performance) {
       console.error('Performance not found for rehearsal', metadata.rehearsalId);
       return;
     }
-    
+
     const rehearsal = performance.rehearsals.find(r => r.id === metadata.rehearsalId);
     if (!rehearsal) {
       console.error('Rehearsal not found', metadata.rehearsalId);
       return;
     }
-    
+
     console.log(`Recording will be added to rehearsal "${rehearsal.title}" in performance "${performance.title}"`);
-    
+
     // Set state for recording process
     setPreRecordingMetadata(metadata);
     setShowPreRecordingMetadataForm(false);
@@ -285,7 +285,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   // CRUD operations
   const addPerformance = (data: { title: string; defaultPerformers: string[] }) => {
     console.log('Adding performance:', data);
-    
+
     // Validate data
     if (!data.title) {
       console.error('Cannot add performance: Title is required');
@@ -298,12 +298,12 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       defaultPerformers: data.defaultPerformers || [],
       rehearsals: [],
     };
-    
+
     console.log('New performance object:', newPerformance);
-    
+
     const updated = [...performances, newPerformance];
     console.log('Updated performances array:', updated);
-    
+
     updatePerformances(updated);
     setSelectedPerformanceId(newPerformance.id);
     setShowPerformanceForm(false);
@@ -311,7 +311,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const updatePerformance = (data: { title: string; defaultPerformers: string[] }) => {
     if (!editingPerformance) return;
-    
+
     const updated = performances.map((perf) => {
       if (perf.id === editingPerformance.id) {
         return { ...perf, title: data.title, defaultPerformers: data.defaultPerformers };
@@ -332,14 +332,14 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       }
 
       console.log('Deleting performance from local state:', performance.title);
-      
+
       // Update local state first (offline-first approach)
       const updated = performances.filter((p) => p.id !== performanceId);
       updatePerformances(updated);
       setSelectedPerformanceId(updated.length > 0 ? updated[0].id : '');
       setEditingPerformance(null);
       setShowPerformanceForm(false);
-  
+
       // Then try to delete from Google Drive
       try {
         console.log('Sending delete request to Google Drive API for performance:', performance.title);
@@ -354,7 +354,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
             performanceTitle: performance.title
           }),
         });
-    
+
         if (!res.ok) {
           const errorText = await res.text();
           console.error(`Failed to delete performance from Google Drive: ${res.status} ${res.statusText}`, errorText);
@@ -392,7 +392,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const updateRehearsal = (data: { title: string; location: string; date: string }) => {
     if (!editingRehearsal) return;
-    
+
     const updated = performances.map((perf) => {
       if (perf.id === editingRehearsal.performanceId) {
         const updatedRehearsals = perf.rehearsals.map((reh) => {
@@ -412,14 +412,14 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const deleteRehearsal = async () => {
     if (!editingRehearsal) return;
-    
+
     try {
       const performance = performances.find(p => p.id === editingRehearsal.performanceId);
-      
+
       if (!performance) {
         throw new Error('Performance not found');
       }
-  
+
       const res = await fetch('/api/delete', {
         method: 'DELETE',
         headers: {
@@ -433,11 +433,11 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
           rehearsalTitle: editingRehearsal.rehearsal.title
         }),
       });
-  
+
       if (!res.ok) {
         throw new Error(`Failed to delete from Google Drive: ${res.statusText}`);
       }
-  
+
       // Update local state
       const updated = performances.map((perf) => {
         if (perf.id === editingRehearsal.performanceId) {
@@ -457,11 +457,79 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     }
   };
 
+  // Function to check if user is authenticated before performing actions
+  const checkAuthentication = async (): Promise<boolean> => {
+    try {
+      // Check if we've confirmed authentication recently (within the last 5 minutes)
+      const lastCheck = sessionStorage.getItem('lastAuthCheck');
+      if (lastCheck) {
+        const lastCheckTime = new Date(lastCheck).getTime();
+        const now = new Date().getTime();
+        const fiveMinutes = 5 * 60 * 1000;
+
+        // If we've checked auth recently, don't check again
+        if (now - lastCheckTime < fiveMinutes) {
+          return true;
+        }
+      }
+
+      console.log('Validating authentication before proceeding with operation');
+
+      const response = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          // Add cache control to prevent browsers from caching the response
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+
+      if (!response.ok) {
+        console.error('Authentication check failed:', response.status, response.statusText);
+
+        if (response.status === 401) {
+          // Check if we've already shown an auth error in the last minute to prevent spam
+          const lastAuthError = sessionStorage.getItem('lastAuthError');
+          const now = new Date().getTime();
+
+          if (!lastAuthError || now - new Date(lastAuthError).getTime() > 60000) {
+            // Store the error time to prevent multiple alerts
+            sessionStorage.setItem('lastAuthError', new Date().toISOString());
+
+            console.error('User session expired, redirect to sign-in');
+            alert('Your session has expired. Please sign in again to continue.');
+
+            // Use window.location for a full page reload to clear any stale state
+            window.location.href = '/sign-in';
+          }
+          return false;
+        }
+
+        return false;
+      }
+
+      const data = await response.json();
+
+      if (data.authenticated) {
+        // Store the successful auth check time
+        sessionStorage.setItem('lastAuthCheck', new Date().toISOString());
+      }
+
+      return !!data.authenticated;
+    } catch (error) {
+      console.error('Error checking authentication:', error);
+      return false;
+    }
+  };
+
   // Upload to Google Drive
   async function uploadToDrive(videoBlob: Blob, thumbnail: Blob | string, metadata: Metadata) {
     const formData = new FormData();
     formData.append('video', videoBlob, `${metadata.title}.mp4`);
-    
+
     // If thumbnail is a string (base64), convert to Blob
     let thumbnailBlob: Blob;
     if (typeof thumbnail === 'string') {
@@ -471,7 +539,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     } else {
       formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
     }
-    
+
     const performance = selectedPerformance;
     const performanceTitle = performance ? performance.title : 'Untitled Performance';
     let rehearsalTitle = 'Untitled Rehearsal';
@@ -479,7 +547,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       const reh = selectedPerformance.rehearsals.find((r) => r.id === metadata.rehearsalId);
       if (reh) rehearsalTitle = reh.title;
     }
-    
+
     formData.append('performanceId', selectedPerformanceId);
     formData.append('performanceTitle', performanceTitle);
     formData.append('rehearsalId', metadata.rehearsalId);
@@ -490,11 +558,11 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       method: 'POST',
       body: formData,
     });
-    
+
     if (!res.ok) {
       throw new Error('Upload failed');
     }
-    
+
     return res.json();
   }
 
@@ -505,8 +573,15 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
     thumbnailBlob: Blob,
     metadata: Metadata
   ): Promise<string> => {
+    // Check authentication before proceeding
+    const isAuthenticated = await checkAuthentication();
+    if (!isAuthenticated) {
+      console.error('Cannot add recording: User is not authenticated');
+      return '';
+    }
+
     console.log('Adding recording:', { rehearsalId, metadata });
-    
+
     if (!rehearsalId) {
       console.error('Cannot add recording: Missing rehearsalId');
       throw new Error('Missing rehearsalId');
@@ -518,29 +593,29 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       if (!performanceId) {
         throw new Error('Could not find performance for rehearsal');
       }
-      
+
       // Generate URLs for video and thumbnail
       const videoUrl = URL.createObjectURL(videoBlob);
       const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
-      
+
       console.log('Generated URLs:', { videoUrl, thumbnailUrl });
 
       // Find the performance and rehearsal
       const performance = performances.find(p => p.id === performanceId);
-      
+
       if (!performance) {
         console.error('Cannot add recording: Performance not found for rehearsal', rehearsalId);
         throw new Error('Performance not found');
       }
-      
+
       const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
       if (!rehearsal) {
         console.error('Cannot add recording: Rehearsal not found', rehearsalId);
         throw new Error('Rehearsal not found');
       }
-      
-      console.log('Found performance and rehearsal:', { 
-        performanceId, 
+
+      console.log('Found performance and rehearsal:', {
+        performanceId,
         performanceTitle: performance.title,
         rehearsalId,
         rehearsalTitle: rehearsal.title
@@ -565,35 +640,35 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         rehearsalTitle: rehearsal.title,
         date: new Date().toISOString(),
       };
-      
+
       console.log('Created new recording object:', newRecording);
 
       // Update rehearsal with new recording
       const updatedRehearsals = rehearsal.recordings
         ? [...rehearsal.recordings, newRecording]
         : [newRecording];
-        
+
       const updatedRehearsal = {
         ...rehearsal,
         recordings: updatedRehearsals
       };
-      
+
       // Update performance with updated rehearsal
       const updatedPerformance = {
         ...performance,
-        rehearsals: performance.rehearsals.map(r => 
+        rehearsals: performance.rehearsals.map(r =>
           r.id === rehearsalId ? updatedRehearsal : r
         )
       };
-      
+
       // Update performances state
-      const updatedPerformances = performances.map(p => 
+      const updatedPerformances = performances.map(p =>
         p.id === performanceId ? updatedPerformance : p
       );
-      
+
       console.log('Updating performances with new recording');
       updatePerformances(updatedPerformances);
-      
+
       // Save video to local storage
       await videoStorage.saveVideo(
         newRecording.id,
@@ -609,7 +684,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
       );
       console.log('Video saved to local storage');
-      
+
       // Queue for server sync
       syncService.queueRecording(
         performanceId!,
@@ -628,7 +703,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
       );
       console.log('Recording queued for sync');
-      
+
       return newRecording.id;
     } catch (error) {
       console.error('Error adding recording:', error);
@@ -638,7 +713,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const updateRecordingMetadata = (metadata: Metadata) => {
     if (!editingRecording) return;
-    
+
     const updated = performances.map((perf) => {
       if (perf.id === selectedPerformanceId) {
         const updatedRehearsals = perf.rehearsals.map((reh) => {
@@ -657,7 +732,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       }
       return perf;
     });
-    
+
     updatePerformances(updated);
     setEditingRecording(null);
     setShowMetadataForm(false);
@@ -665,11 +740,11 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   const deleteRecording = async () => {
     if (!editingRecording) return;
-    
+
     try {
       const performance = performances.find(p => p.id === selectedPerformanceId);
       const rehearsal = performance?.rehearsals.find(r => r.id === editingRecording.rehearsalId);
-      
+
       if (!performance || !rehearsal) {
         throw new Error('Performance or rehearsal not found');
       }
@@ -713,7 +788,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
         return perf;
       });
-      
+
       updatePerformances(updated);
       setEditingRecording(null);
       setShowMetadataForm(false);
@@ -733,19 +808,19 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    
+
     setCollections(prev => [...prev, newCollection]);
   };
 
   const updateCollection = (id: string, data: { title: string; description?: string }) => {
-    setCollections(prev => 
-      prev.map(collection => 
-        collection.id === id 
-          ? { 
-              ...collection, 
-              ...data, 
-              updatedAt: new Date().toISOString() 
-            } 
+    setCollections(prev =>
+      prev.map(collection =>
+        collection.id === id
+          ? {
+            ...collection,
+            ...data,
+            updatedAt: new Date().toISOString()
+          }
           : collection
       )
     );
@@ -756,28 +831,28 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   };
 
   const addToCollection = (collectionId: string, recordingId: string) => {
-    setCollections(prev => 
-      prev.map(collection => 
+    setCollections(prev =>
+      prev.map(collection =>
         collection.id === collectionId && !collection.recordingIds.includes(recordingId)
-          ? { 
-              ...collection, 
-              recordingIds: [...collection.recordingIds, recordingId],
-              updatedAt: new Date().toISOString() 
-            } 
+          ? {
+            ...collection,
+            recordingIds: [...collection.recordingIds, recordingId],
+            updatedAt: new Date().toISOString()
+          }
           : collection
       )
     );
   };
 
   const removeFromCollection = (collectionId: string, recordingId: string) => {
-    setCollections(prev => 
-      prev.map(collection => 
+    setCollections(prev =>
+      prev.map(collection =>
         collection.id === collectionId
-          ? { 
-              ...collection, 
-              recordingIds: collection.recordingIds.filter(id => id !== recordingId),
-              updatedAt: new Date().toISOString() 
-            } 
+          ? {
+            ...collection,
+            recordingIds: collection.recordingIds.filter(id => id !== recordingId),
+            updatedAt: new Date().toISOString()
+          }
           : collection
       )
     );
@@ -786,7 +861,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   // Add this function inside the PerformanceProvider component
   const findPerformanceIdByRehearsalId = (rehearsalId: string): string | undefined => {
     console.log('Finding performance for rehearsal ID:', rehearsalId);
-    
+
     for (const performance of performances) {
       for (const rehearsal of performance.rehearsals) {
         if (rehearsal.id === rehearsalId) {
@@ -795,7 +870,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         }
       }
     }
-    
+
     console.error(`No performance found for rehearsal ID: ${rehearsalId}`);
     return undefined;
   };
@@ -803,7 +878,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
   // New function to handle external video links
   const handleExternalVideoLink = (metadata: Metadata & { externalUrl: string }) => {
     const { rehearsalId, externalUrl, ...metadataWithoutUrl } = metadata;
-    
+
     // Create a new recording with the external URL
     const newRecordingId = generateId('rec');
     const newRecording: Recording = {
@@ -820,7 +895,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
       videoUrl: "",
       thumbnailUrl: '',
     };
-    
+
     // Add the recording to the appropriate rehearsal
     setPerformances(prevPerformances => {
       return prevPerformances.map(performance => {
@@ -832,7 +907,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
           };
           return {
             ...performance,
-            rehearsals: performance.rehearsals.map(r => 
+            rehearsals: performance.rehearsals.map(r =>
               r.id === rehearsalId ? updatedRehearsal : r
             )
           };
@@ -860,21 +935,21 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         recordingTargetRehearsalId,
         preRecordingMetadata,
         videoToWatch,
-        
+
         // Add these state setters
         setShowRecorder,
         setPreRecordingMetadata,
         setRecordingTargetRehearsalId,
-        
+
         // Computed Properties
         selectedPerformance,
         filteredRecordings,
         todaysRecordings,
-        
+
         // Actions
         setSearchQuery,
         setSelectedPerformanceId,
-        
+
         // Modal Controls
         openRecorder,
         closeRecorder,
@@ -888,7 +963,7 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         closeRehearsalForm,
         openVideoPlayer,
         closeVideoPlayer,
-        
+
         // CRUD Operations
         addPerformance,
         updatePerformance,
@@ -906,10 +981,10 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         deleteCollection,
         addToCollection,
         removeFromCollection,
-        
+
         // State setters
         setPerformances,
-        
+
         // New property
         handleExternalVideoLink,
       }}

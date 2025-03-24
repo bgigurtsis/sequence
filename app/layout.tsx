@@ -3,6 +3,8 @@ import { ClerkProvider, SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { GoogleDriveProvider } from '@/contexts/GoogleDriveContext';
+import AuthCheck from '@/components/AuthCheck';
+import { SyncIndicator } from '@/components/SyncIndicator';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -21,6 +23,8 @@ const Navigation = () => {
           <a href="/" className="hover:underline">Home</a>
           <a href="/settings" className="hover:underline">Settings</a>
           <SignedIn>
+            <AuthCheck />
+            <SyncIndicator />
             <UserButton afterSignOutUrl="/" />
           </SignedIn>
           <SignedOut>

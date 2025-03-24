@@ -70,3 +70,57 @@ Centralize all API logic from separate files under `app/api` into a single catch
 - The dispatcher properly directs requests based on URL path and HTTP method.
 - Clear, consistent logs indicate the progress of each operation.
 - Documentation and Cursor rules are updated accordingly.
+
+
+Project Milestone: Fix Google Drive Authentication Flow
+Goal
+Address the 401 Unauthorized errors occurring during the recording upload process to ensure seamless authentication between client and API endpoints.
+Current Issue
+The application is experiencing authentication failures when attempting to:
+Fetch user data via /api/auth/me (401 Unauthorized)
+Upload recordings via /api/upload/form (401 Unauthorized)
+These errors break the core workflow of recording and saving videos to Google Drive, causing uncaught promise rejections and preventing successful uploads.
+Key Tasks
+Diagnose Authentication Failures
+[ ] Inspect how Clerk authentication tokens are being passed to API routes
+[ ] Review middleware configuration to ensure auth headers are properly processed
+[ ] Debug the session validation logic in the affected API endpoints
+[ ] Investigate why /api/auth/me is failing to identify authenticated users
+Fix Authentication Token Handling
+[ ] Ensure Clerk session tokens are correctly included in all fetch requests
+[ ] Implement consistent auth header handling across all API routes
+[ ] Refactor any middleware that handles authentication verification
+[ ] Address the insecure fallback to performanceId when user authentication fails
+Improve Error Handling
+[ ] Add more descriptive error messages for authentication failures
+[ ] Implement graceful error recovery for auth failures (retry with refresh token)
+[ ] Create user-friendly error notifications instead of console errors
+[ ] Add client-side session validation before attempting uploads
+Testing and Verification
+[ ] Test authentication flow in different scenarios (new session, expired session)
+[ ] Verify that recording uploads work end-to-end with proper authentication
+[ ] Confirm that auth persists across page refreshes and navigation
+[ ] Test the flow in both development and production environments
+Documentation
+[ ] Document the authentication flow for future reference
+[ ] Update troubleshooting guides with solutions for common auth issues
+[ ] Add comments to authentication-related code explaining the expected behavior
+Implementation Guidelines
+API Route Improvements
+Review how the unified API router validates authentication
+Ensure consistent auth checking across all endpoints
+Fix the middleware to properly extract and validate Clerk tokens
+Client-Side Fixes
+Update syncService.ts to properly handle authentication state
+Ensure auth tokens are included in all API requests
+Add proper error handling for auth failures with user-friendly messaging
+Session Management
+Verify Clerk session is properly initialized and maintained
+Implement proper session refresh mechanisms
+Consider adding a dedicated auth state provider/context
+Completion Criteria
+[ ] No more 401 errors when uploading recordings
+[ ] Authentication state is properly maintained throughout the application
+[ ] Clear error messages are displayed to users when authentication issues occur
+[ ] Full recording and upload workflow succeeds without authentication errors
+[ ] Comprehensive documentation of the authentication flow is available
