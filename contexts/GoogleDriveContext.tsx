@@ -7,7 +7,10 @@ interface GoogleDriveContextType {
   isConnected: boolean;
   isLoading: boolean;
   error: string | null;
+  needsReconnect: boolean;
+  hasOAuthAccount: boolean;
   connectGoogleDrive: () => Promise<void>;
+  reconnectGoogleDrive: () => Promise<void>;
   disconnectGoogleDrive: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 }
@@ -19,6 +22,8 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  const [hasOAuthAccount, setHasOAuthAccount] = useState(false);
 
   useEffect(() => {
     if (isLoaded && isSignedIn) {
@@ -36,6 +41,8 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
       // Make sure user is authenticated
       if (!isSignedIn) {
         setIsConnected(false);
+        setNeedsReconnect(false);
+        setHasOAuthAccount(false);
         setError('You must be signed in to use Google Drive');
         setIsLoading(false);
         return;
@@ -46,7 +53,9 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         method: 'GET',
         credentials: 'include',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache'
         }
       });
 
@@ -55,6 +64,8 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
       // Handle response status
       if (response.status === 401) {
         setIsConnected(false);
+        setNeedsReconnect(false);
+        setHasOAuthAccount(false);
         setError('You must be signed in to use Google Drive');
         setIsLoading(false);
         return;
@@ -63,6 +74,8 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
       if (response.status === 404) {
         console.error('API endpoint not found. Check that /api/auth/google-status exists.');
         setIsConnected(false);
+        setNeedsReconnect(false);
+        setHasOAuthAccount(false);
         setError('API endpoint not found. Contact support.');
         setIsLoading(false);
         return;
@@ -75,6 +88,8 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
       if (responseText.includes('<!DOCTYPE') || responseText.includes('<html>')) {
         console.error('Received HTML instead of JSON from google-status endpoint');
         setIsConnected(false);
+        setNeedsReconnect(false);
+        setHasOAuthAccount(false);
         setError(`Server error: Received HTML instead of JSON. Status: ${response.status}`);
         setIsLoading(false);
         return;
@@ -85,16 +100,29 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         const data = JSON.parse(responseText);
         console.log('Google Drive status data:', data);
 
+        // Set OAuth account status based on API response
+        setHasOAuthAccount(!!data.hasOAuthAccount);
+        
+        // Set reconnection status based on API response
+        setNeedsReconnect(!!data.needsReconnect);
+
         if (data.connected) {
           setIsConnected(true);
           setError(null);
         } else {
           setIsConnected(false);
-          setError(data.message || 'Not connected to Google Drive');
+          
+          // Customize error message for reconnection scenario
+          if (data.needsReconnect) {
+            setError('Google Drive connection needs to be refreshed. Please reconnect.');
+          } else {
+            setError(data.message || 'Not connected to Google Drive');
+          }
         }
       } catch (err) {
         console.error('Error parsing response:', err);
         setIsConnected(false);
+        setNeedsReconnect(false);
         // Fix the TypeScript error by safely accessing the error message
         const errorMessage = err instanceof Error ? err.message : String(err);
         setError(`Failed to parse response: ${errorMessage}`);
@@ -104,6 +132,7 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
     } catch (err) {
       console.error('Error checking Google Drive status:', err);
       setIsConnected(false);
+      setNeedsReconnect(false);
       // Fix the TypeScript error by safely accessing the error message
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(`Failed to check connection: ${errorMessage}`);
@@ -254,6 +283,58 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
     }
   };
 
+  const reconnectGoogleDrive = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      // Check if user is signed in
+      if (!isSignedIn) {
+        setError('You must be signed in to reconnect Google Drive');
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('Starting Google Drive reconnection...');
+      
+      // Call the reconnection endpoint instead of the regular auth URL endpoint
+      const response = await fetch('/api/auth/google-reconnect', {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Failed to get Google reconnect URL:', errorText);
+        setError('Failed to start Google Drive reconnection');
+        setIsLoading(false);
+        return;
+      }
+
+      const { url } = await response.json();
+
+      // Check that we got a valid URL
+      if (!url) {
+        console.error('No Google reconnect URL returned from API');
+        setError('Failed to start Google Drive reconnection');
+        setIsLoading(false);
+        return;
+      }
+
+      // Open the Google auth page in the current window
+      window.location.href = url;
+    } catch (err) {
+      console.error('Error reconnecting to Google Drive:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setError(`Failed to reconnect: ${errorMessage}`);
+      setIsLoading(false);
+    }
+  };
+
   const disconnectGoogleDrive = async () => {
     try {
       setIsLoading(true);
@@ -285,7 +366,10 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         isConnected,
         isLoading,
         error,
+        needsReconnect,
+        hasOAuthAccount,
         connectGoogleDrive,
+        reconnectGoogleDrive,
         disconnectGoogleDrive,
         refreshStatus,
       }}

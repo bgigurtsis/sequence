@@ -1,5 +1,13 @@
-import React, { useState, useRef } from 'react';
-import { Camera, Square, Pause, Play } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Camera, Square, Pause, Play, RefreshCw } from 'lucide-react';
+
+// Extend Window interface to include our global functions
+declare global {
+  interface Window {
+    refreshBeforeCriticalOperation?: (enforceGoogleCheck?: boolean) => Promise<boolean>;
+    validateAllTokensForRecording?: () => Promise<boolean>;
+  }
+}
 
 type VideoRecorderProps = {
   onRecordingComplete: (data: { videoBlob: Blob; thumbnail: string }) => void;
@@ -10,12 +18,104 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
   const [thumbnail, setThumbnail] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [isRefreshingSession, setIsRefreshingSession] = useState<boolean>(false);
+  const [validationRetries, setValidationRetries] = useState<number>(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const validationTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Run validation check when component mounts to catch problems early
+  useEffect(() => {
+    // Pre-flight validation check
+    const preflightCheck = async () => {
+      try {
+        if (typeof window !== 'undefined' && window.validateAllTokensForRecording) {
+          const isValid = await window.validateAllTokensForRecording();
+          if (!isValid) {
+            console.warn('Pre-flight token validation failed. Session may need refresh.');
+          }
+        }
+      } catch (error) {
+        console.error('Error during pre-flight validation check:', error);
+      }
+    };
+    
+    preflightCheck();
+    
+    // Clean up any timers on unmount
+    return () => {
+      if (validationTimerRef.current) {
+        clearTimeout(validationTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Enhanced validation with retries and more robust error handling
+  const validateSession = async (maxRetries = 3): Promise<boolean> => {
+    setIsRefreshingSession(true);
+    setSessionError(null);
+    
+    let attempt = 0;
+    while (attempt < maxRetries) {
+      try {
+        // Try using the global validation function
+        if (typeof window !== 'undefined' && window.validateAllTokensForRecording) {
+          console.log(`Session validation attempt ${attempt + 1} of ${maxRetries}`);
+          const tokensValid = await window.validateAllTokensForRecording();
+          
+          if (tokensValid) {
+            console.log('Session validation successful');
+            setIsRefreshingSession(false);
+            setValidationRetries(0);
+            return true;
+          }
+          
+          console.warn(`Session validation attempt ${attempt + 1} failed, ${maxRetries - attempt - 1} retries left`);
+        } else {
+          console.error('Global validation function not available');
+          break; // No point retrying if function doesn't exist
+        }
+      } catch (error) {
+        console.error(`Session validation error on attempt ${attempt + 1}:`, error);
+      }
+      
+      // Wait between retries (increasing delay with each attempt)
+      const delay = 500 * Math.pow(1.5, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      attempt++;
+    }
+    
+    // All attempts failed or function not available
+    setIsRefreshingSession(false);
+    setValidationRetries(attempt);
+    return false;
+  };
+
+  // Manual session refresh function
+  const handleManualRefresh = async () => {
+    setSessionError(null);
+    const success = await validateSession(3);
+    if (success) {
+      setSessionError(null);
+    } else {
+      setSessionError('Session validation failed. Try refreshing the page if the problem persists.');
+    }
+  };
 
   const startRecording = async () => {
     try {
+      // Clear any previous errors
+      setSessionError(null);
+      
+      // Validate tokens before starting recording
+      const tokensValid = await validateSession(3);
+      if (!tokensValid) {
+        setSessionError('Failed to validate your session. Click "Refresh Session" and try again, or refresh the page if the problem persists.');
+        return;
+      }
+      
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' },
         audio: true,
@@ -27,7 +127,9 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
         videoRef.current.play();
       }
 
-      const mediaRecorder = new MediaRecorder(stream);
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'video/webm;codecs=vp9,opus'
+      });
       mediaRecorderRef.current = mediaRecorder;
 
       const chunks: Blob[] = [];
@@ -46,14 +148,55 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
       setIsPaused(false);
     } catch (err) {
       console.error('Error accessing camera:', err);
+      setIsRefreshingSession(false);
+      setSessionError(`Could not access camera: ${(err as Error).message}`);
     }
   };
 
-  const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    setIsRecording(false);
-    setIsPaused(false);
+  const stopRecording = async () => {
+    try {
+      setSessionError(null);
+      setIsRefreshingSession(true);
+      
+      // Try to validate all tokens before stopping to ensure we have valid session for upload
+      let tokensValid = await validateSession(2);
+      
+      setIsRefreshingSession(false);
+      
+      // Now stop the recording regardless of token validation
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      
+      setIsRecording(false);
+      setIsPaused(false);
+      
+      // If tokens were invalid, set a warning but still allow the recording to complete
+      if (!tokensValid) {
+        setSessionError('Session validation issues detected. The recording was saved, but you may need to refresh the session to upload it.');
+      }
+    } catch (error) {
+      console.error('Error stopping recording:', error);
+      setIsRefreshingSession(false);
+      
+      // Still try to stop recording even if session refresh fails
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      
+      setIsRecording(false);
+      setIsPaused(false);
+      
+      setSessionError('Error during session validation. The recording was saved, but you may need to refresh the page to upload it.');
+    }
   };
 
   const pauseRecording = () => {
@@ -70,81 +213,138 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
     }
   };
 
-  const generateThumbnail = (videoChunks: Blob[]) => {
-    const blob = new Blob(videoChunks, { type: 'video/mp4' });
-    const videoUrl = URL.createObjectURL(blob);
-    const videoElement = document.createElement('video');
-    videoElement.src = videoUrl;
-    videoElement.muted = true;
-    videoElement.playsInline = true;
+  const generateThumbnail = async (videoChunks: Blob[]) => {
+    try {
+      const blob = new Blob(videoChunks, { type: 'video/webm' });
+      const videoUrl = URL.createObjectURL(blob);
+      const videoElement = document.createElement('video');
+      videoElement.src = videoUrl;
+      videoElement.muted = true;
+      videoElement.playsInline = true;
 
-    videoElement.addEventListener('loadedmetadata', () => {
-      // If the video is shorter than 1 second, use half its duration.
-      const seekTime = videoElement.duration < 1 ? videoElement.duration / 2 : 1;
-      videoElement.currentTime = seekTime;
-    });
+      videoElement.addEventListener('loadedmetadata', () => {
+        // If the video is shorter than 1 second, use half its duration.
+        const seekTime = videoElement.duration < 1 ? videoElement.duration / 2 : 1;
+        videoElement.currentTime = seekTime;
+      });
 
-    videoElement.addEventListener('seeked', () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoElement.videoWidth;
-      canvas.height = videoElement.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((thumbnailBlob) => {
-          if (thumbnailBlob) {
-            // Convert the blob to a base64 data URL so it persists across reloads.
-            const reader = new FileReader();
-            reader.onloadend = () => {
-              const dataUrl = reader.result as string;
-              setThumbnail(dataUrl);
-              onRecordingComplete({ videoBlob: blob, thumbnail: dataUrl });
-            };
-            reader.readAsDataURL(thumbnailBlob);
-          }
-        }, 'image/jpeg', 0.7);
-      }
-    });
+      videoElement.addEventListener('seeked', () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = videoElement.videoWidth;
+        canvas.height = videoElement.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+          
+          // When generating thumbnail, validate session one more time before completing
+          canvas.toBlob(async (thumbnailBlob) => {
+            if (thumbnailBlob) {
+              // Validate session again before sending to parent component
+              setIsRefreshingSession(true);
+              let tokensValid = false;
+              
+              // Make multiple attempts to validate tokens
+              tokensValid = await validateSession(3);
+              setIsRefreshingSession(false);
+              
+              // Convert the blob to a base64 data URL so it persists across reloads
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const dataUrl = reader.result as string;
+                setThumbnail(dataUrl);
+                
+                // Warn if tokens validation failed but still proceed with the recording
+                if (!tokensValid) {
+                  setSessionError('Your session may have expired. The recording is ready, but you may need to refresh the session before uploading it.');
+                }
+                
+                // Complete the recording regardless of session state
+                onRecordingComplete({ videoBlob: blob, thumbnail: dataUrl });
+              };
+              reader.readAsDataURL(thumbnailBlob);
+            }
+          }, 'image/jpeg', 0.7);
+        }
+      });
+      
+      // Ensure video can load
+      videoElement.load();
+
+    } catch (error) {
+      console.error('Error generating thumbnail:', error);
+      setSessionError('Error creating video thumbnail. Please try again.');
+    }
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-lg p-4">
-      <div className="relative aspect-video bg-gray-100 rounded-lg overflow-hidden mb-4">
-        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
-        {thumbnail && (
-          <img
-            src={thumbnail}
-            alt="Recording thumbnail"
-            className="absolute inset-0 w-full h-full object-cover"
-          />
+    <div className="flex flex-col items-center space-y-4">
+      {sessionError && (
+        <div className="bg-red-50 text-red-700 p-2 rounded-md flex flex-col items-center w-full">
+          <p>{sessionError}</p>
+          <button 
+            onClick={handleManualRefresh}
+            className="mt-2 bg-blue-600 text-white px-3 py-1 rounded-md flex items-center text-sm"
+            disabled={isRefreshingSession}
+          >
+            <RefreshCw className="w-4 h-4 mr-1" />
+            Refresh Session
+          </button>
+        </div>
+      )}
+      
+      <div className="relative w-full aspect-video bg-gray-900 rounded-lg overflow-hidden">
+        <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
+        
+        {isRefreshingSession && (
+          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+            <div className="flex flex-col items-center space-y-2">
+              <RefreshCw className="w-8 h-8 text-white animate-spin" />
+              <p className="text-white">Validating session...</p>
+            </div>
+          </div>
         )}
       </div>
-
-      <div className="flex justify-center space-x-4">
-        {!isRecording && recordedChunks.length === 0 && (
-          <button onClick={startRecording} className="flex items-center px-4 py-2 bg-red-500 text-white rounded-lg">
-            <Camera className="mr-2" size={20} />
-            Start Recording
+      
+      <div className="flex space-x-4">
+        {!isRecording ? (
+          <button
+            onClick={startRecording}
+            disabled={isRefreshingSession}
+            className="bg-red-600 text-white p-3 rounded-full hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+            aria-label="Start recording"
+          >
+            <Camera className="w-6 h-6" />
           </button>
-        )}
-
-        {isRecording && (
+        ) : (
           <>
-            {!isPaused ? (
-              <button onClick={pauseRecording} className="flex items-center px-4 py-2 bg-yellow-500 text-white rounded-lg">
-                <Pause className="mr-2" size={20} />
-                Pause Recording
+            <button
+              onClick={stopRecording}
+              disabled={isRefreshingSession}
+              className="bg-red-600 text-white p-3 rounded-full hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+              aria-label="Stop recording"
+            >
+              <Square className="w-6 h-6" />
+            </button>
+            
+            {isPaused ? (
+              <button
+                onClick={resumeRecording}
+                disabled={isRefreshingSession}
+                className="bg-green-600 text-white p-3 rounded-full hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                aria-label="Resume recording"
+              >
+                <Play className="w-6 h-6" />
               </button>
             ) : (
-              <button onClick={resumeRecording} className="flex items-center px-4 py-2 bg-green-500 text-white rounded-lg">
-                <Play className="mr-2" size={20} />
-                Resume Recording
+              <button
+                onClick={pauseRecording}
+                disabled={isRefreshingSession}
+                className="bg-yellow-600 text-white p-3 rounded-full hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                aria-label="Pause recording"
+              >
+                <Pause className="w-6 h-6" />
               </button>
             )}
-            <button onClick={stopRecording} className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-lg">
-              <Square className="mr-2" size={20} />
-              Stop Recording
-            </button>
           </>
         )}
       </div>

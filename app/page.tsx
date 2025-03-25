@@ -24,6 +24,7 @@ import { generateId } from '../lib/utils';
 import RecordingOptions from '../components/RecordingOptions';
 import VideoLinkInput from '../components/VideoLinkInput';
 import RecordingDetailsModal from '../components/RecordingDetailsModal';
+import PreRecordingValidation from '../components/PreRecordingValidation';
 
 // Add a utility function to format dates consistently
 function formatDateForMetadata(): string {
@@ -127,6 +128,10 @@ function HomePageContent() {
 
   // Keep the local state declaration
   const [showPreRecordingMetadataForm, setShowPreRecordingMetadataForm] = useState(false);
+
+  // Add a new state
+  const [isValidatingSession, setIsValidatingSession] = useState(false);
+  const [isSessionValid, setIsSessionValid] = useState(false);
 
   // Handler for video recording completion
   const handleVideoRecordingComplete = async (videoData: { videoBlob: Blob; thumbnail: string }) => {
@@ -297,23 +302,13 @@ function HomePageContent() {
   };
 
   const startRecording = (rehearsalId: string) => {
-    // Set the rehearsal ID
     setRecordingTargetRehearsalId(rehearsalId);
     
-    // Always create a basic preRecordingMetadata to avoid the error
-    setPreRecordingMetadata({
-      title: `Recording at ${new Date().toLocaleTimeString()}`,
-      time: new Date().toLocaleTimeString(),
-      performers: [],
-      rehearsalId: rehearsalId,
-      tags: [],
-      sourceType: 'recorded',
-      date: formatDateForMetadata()
-    });
-    
-    // Then start recording
-    setRecordingMode('record');
+    // Start with session validation
+    setIsValidatingSession(true);
     setShowRecorder(true);
+    setShowUpload(false);
+    setRecordingMode('record');
   };
 
   const startUpload = (rehearsalId: string) => {
@@ -647,6 +642,12 @@ function HomePageContent() {
     setUploadedThumbnailBlob(null);
   };
 
+  // Add a handler for validation completion
+  const handleValidationComplete = (isValid: boolean) => {
+    setIsValidatingSession(false);
+    setIsSessionValid(isValid);
+  };
+
   return (
     <div className="max-w-6xl mx-auto p-4">
       <header className="flex justify-between items-center p-4 bg-gray-200 rounded-lg mb-6">
@@ -801,7 +802,25 @@ function HomePageContent() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-40">
           <div className="bg-white p-4 rounded-lg shadow-lg">
             <h2 className="text-xl font-semibold mb-4">Record Video</h2>
-            <VideoRecorder onRecordingComplete={handleVideoRecordingComplete} />
+            
+            {isValidatingSession ? (
+              <PreRecordingValidation onValidationComplete={handleValidationComplete} />
+            ) : isSessionValid ? (
+              <VideoRecorder onRecordingComplete={handleVideoRecordingComplete} />
+            ) : (
+              <div className="py-4 px-2 text-center">
+                <p className="text-red-600 mb-4">Session validation failed. Please try again.</p>
+                <button
+                  onClick={() => {
+                    setIsValidatingSession(true);
+                  }}
+                  className="bg-blue-500 text-white px-4 py-2 rounded-md"
+                >
+                  Retry Validation
+                </button>
+              </div>
+            )}
+            
             <button
               onClick={closeRecorder}
               className="mt-4 text-red-500 font-medium"

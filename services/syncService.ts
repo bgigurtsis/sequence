@@ -239,71 +239,76 @@ class SyncService {
     }, 60000); // Check every minute
   }
 
-  // Validate authentication before queueing a recording
+  /**
+   * Validate authentication for upload
+   * Makes sure user is authenticated before attempting uploads
+   * @returns True if authenticated, false otherwise
+   */
   private async validateAuthForUpload(): Promise<boolean> {
     try {
-      // Check if we've confirmed authentication recently (within the last minute)
-      const lastCheck = sessionStorage.getItem('lastAuthCheck');
-      if (lastCheck) {
-        const lastCheckTime = new Date(lastCheck).getTime();
-        const now = new Date().getTime();
-        const oneMinute = 60 * 1000;
-
-        // If we've checked auth recently, don't check again
-        if (now - lastCheckTime < oneMinute) {
-          return true;
-        }
-      }
-
-      logWithTimestamp('AUTH', 'Validating authentication for upload');
-
-      const response = await fetch('/api/auth/me', {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          // Add cache control to prevent browsers from caching the response
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        }
-      });
-
-      if (!response.ok) {
-        logWithTimestamp('AUTH', `Authentication validation failed: ${response.status}`);
-
-        if (response.status === 401) {
-          // Check if we've already shown an auth error in the last minute to prevent spam
-          const lastAuthError = sessionStorage.getItem('lastAuthError');
-          const now = new Date().getTime();
-
-          if (!lastAuthError || now - new Date(lastAuthError).getTime() > 60000) {
-            // Store the error time to prevent multiple alerts
-            sessionStorage.setItem('lastAuthError', new Date().toISOString());
-
-            logWithTimestamp('AUTH', 'User needs to sign in, redirecting');
-            // Alert the user and redirect to sign-in
-            alert('Your session has expired. Please sign in again to upload recordings.');
-            // Use window.location for a full page reload to clear any stale state
-            window.location.href = '/sign-in';
-          }
+      // First try to use the global validation function if available (most comprehensive)
+      if (typeof window !== 'undefined' && window.validateAllTokensForRecording) {
+        logWithTimestamp('AUTH', 'Using global validateAllTokensForRecording for upload validation');
+        const tokensValid = await window.validateAllTokensForRecording();
+        
+        if (!tokensValid) {
+          logWithTimestamp('AUTH', 'Token validation failed via global validator');
           return false;
         }
+        return true;
+      }
 
+      // If global validator not available, use direct API check
+      logWithTimestamp('AUTH', 'Fetching user ID from /api/auth/me');
+      
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        credentials: 'include' // Important for sending cookies/auth tokens
+      });
+
+      if (!res.ok) {
+        logWithTimestamp('AUTH', `Authentication check failed with status ${res.status}`);
+        
+        // If it's a 401, try to refresh the session and try once more
+        if (res.status === 401 && typeof window !== 'undefined' && window.refreshBeforeCriticalOperation) {
+          logWithTimestamp('AUTH', 'Attempting session refresh after 401');
+          const refreshSuccess = await window.refreshBeforeCriticalOperation(false);
+          
+          if (refreshSuccess) {
+            // Try the auth check again
+            const secondRes = await fetch('/api/auth/me', {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              credentials: 'include'
+            });
+            
+            if (secondRes.ok) {
+              logWithTimestamp('AUTH', 'Authentication succeeded after session refresh');
+              return true;
+            }
+          }
+          
+          logWithTimestamp('AUTH', 'Authentication still failed after session refresh');
+          return false;
+        }
+        
         return false;
       }
 
-      const data = await response.json();
-
-      if (data.authenticated) {
-        // Store the successful auth check time
-        sessionStorage.setItem('lastAuthCheck', new Date().toISOString());
-      }
-
-      logWithTimestamp('AUTH', `Authentication validated: ${!!data.authenticated}`);
-      return !!data.authenticated;
-    } catch (error: any) {
-      logWithTimestamp('AUTH', `Error validating authentication: ${error.message}`);
+      const data = await res.json();
+      
+      logWithTimestamp('AUTH', `User ID fetched: ${data?.userId ? 'Success' : 'Missing'}`);
+      
+      return Boolean(data?.userId);
+    } catch (error) {
+      logWithTimestamp('ERROR', 'Authentication check failed', error);
       return false;
     }
   }

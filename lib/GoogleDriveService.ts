@@ -47,20 +47,34 @@ export class GoogleDriveService {
 
     /**
      * Check if the Google Drive connection is working
-     * @param refreshToken - OAuth refresh token
+     * @param userId - The user's ID
      * @returns True if connection is working, false otherwise
      */
-    async checkConnection(refreshToken: string): Promise<boolean> {
+    async checkConnection(userId: string): Promise<boolean> {
         try {
-            this.logOperation('start', 'Checking Google Drive connection');
+            this.logOperation('start', 'Checking Google Drive connection', { userId });
 
-            if (!refreshToken) {
-                this.logOperation('error', 'No refresh token provided');
-                return false;
+            // Create an OAuth client for this user
+            // This will automatically get the token from Clerk's wallet
+            const oauth2Client = await this.getUserAuthClient(userId);
+            
+            if (!oauth2Client) {
+                this.logOperation('error', 'Failed to get OAuth client', { 
+                    userId,
+                    reason: 'OAuth client creation failed - likely a token issue'
+                });
+                throw new Error('Failed to create Google OAuth client');
             }
 
-            const oauth2Client = this.createOAuth2Client();
-            oauth2Client.setCredentials({ refresh_token: refreshToken });
+            // Check token validity directly
+            if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
+                this.logOperation('error', 'No access token in OAuth client credentials', {
+                    userId,
+                    hasCredentials: !!oauth2Client.credentials,
+                    credentialKeys: oauth2Client.credentials ? Object.keys(oauth2Client.credentials) : []
+                });
+                throw new Error('Missing Google access token');
+            }
 
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
@@ -68,28 +82,63 @@ export class GoogleDriveService {
             // 1. Try to create a test folder
             // 2. Then delete it if successful
             this.logOperation('progress', 'Creating test folder');
-            const testFolder = await drive.files.create({
-                requestBody: {
-                    name: 'StageVault_ConnectionTest',
-                    mimeType: 'application/vnd.google-apps.folder',
-                },
-                fields: 'id'
-            });
-
-            if (testFolder?.data?.id) {
-                // Successfully created folder, now delete it
-                this.logOperation('progress', 'Deleting test folder');
-                await drive.files.delete({
-                    fileId: testFolder.data.id
+            
+            try {
+                const testFolder = await drive.files.create({
+                    requestBody: {
+                        name: 'StageVault_ConnectionTest',
+                        mimeType: 'application/vnd.google-apps.folder',
+                    },
+                    fields: 'id'
                 });
-                this.logOperation('success', 'Google Drive connection successful');
-                return true;
-            }
 
-            this.logOperation('error', 'Failed to create test folder');
-            return false;
+                if (testFolder?.data?.id) {
+                    // Successfully created folder, now delete it
+                    this.logOperation('progress', 'Deleting test folder', { folderId: testFolder.data.id });
+                    await drive.files.delete({
+                        fileId: testFolder.data.id
+                    });
+                    this.logOperation('success', 'Google Drive connection successful');
+                    return true;
+                }
+
+                this.logOperation('error', 'Failed to create test folder - incomplete response', {
+                    userId,
+                    response: JSON.stringify(testFolder || {})
+                });
+                return false;
+            } catch (folderError) {
+                // Capture specific folder operation errors
+                const errorMessage = folderError instanceof Error ? folderError.message : String(folderError);
+                const errorStatus = (folderError as any)?.response?.status || 'unknown';
+                const errorDetails = (folderError as any)?.response?.data || {};
+                
+                this.logOperation('error', `Drive folder operation failed: ${errorMessage}`, {
+                    userId,
+                    statusCode: errorStatus,
+                    errorDetails,
+                    errorStack: folderError instanceof Error ? folderError.stack : null
+                });
+                
+                // Re-throw with more descriptive message
+                throw new Error(`Google Drive operation failed: ${errorMessage} (${errorStatus})`);
+            }
         } catch (error) {
-            this.logOperation('error', `Google Drive connection failed: ${(error as Error).message}`);
+            // Provide detailed error diagnostics
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const isAuthError = errorMessage.includes('auth') || 
+                               errorMessage.includes('token') || 
+                               errorMessage.includes('credentials') ||
+                               errorMessage.includes('permission');
+                               
+            this.logOperation('error', `Google Drive connection failed: ${errorMessage}`, {
+                userId,
+                isAuthError,
+                errorType: error instanceof Error ? error.name : 'Unknown',
+                errorStack: error instanceof Error ? error.stack : null,
+                error: JSON.stringify(error, Object.getOwnPropertyNames(error as object), 2)
+            });
+            
             return false;
         }
     }
@@ -103,26 +152,46 @@ export class GoogleDriveService {
             this.logOperation('start', 'Generating Google Auth URL');
 
             if (!this.CLIENT_ID || !this.CLIENT_SECRET || !this.REDIRECT_URI) {
+                const missingVars = [
+                    !this.CLIENT_ID ? 'CLIENT_ID' : null,
+                    !this.CLIENT_SECRET ? 'CLIENT_SECRET' : null,
+                    !this.REDIRECT_URI ? 'REDIRECT_URI' : null
+                ].filter(Boolean);
+                
+                this.logOperation('error', 'Missing Google OAuth credentials in environment variables', { missingVars });
                 throw new Error('Missing Google OAuth credentials in environment variables');
             }
 
             const oauth2Client = this.createOAuth2Client();
 
+            // Define the scopes we need
+            const scopes = [
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/drive.file',
+                'https://www.googleapis.com/auth/drive.metadata.readonly'
+            ];
+            
+            this.logOperation('debug', 'Configuring OAuth parameters', {
+                scopes,
+                access_type: 'offline',
+                prompt: 'consent',
+                redirect_uri: this.REDIRECT_URI
+            });
+
             const url = oauth2Client.generateAuthUrl({
                 access_type: 'offline',
-                scope: [
-                    'https://www.googleapis.com/auth/userinfo.profile',
-                    'https://www.googleapis.com/auth/userinfo.email',
-                    'https://www.googleapis.com/auth/drive.file',
-                    'https://www.googleapis.com/auth/drive.metadata.readonly'
-                ],
+                scope: scopes,
                 prompt: 'consent' // Force to always display consent screen to get refresh token
             });
 
-            this.logOperation('success', 'Generated Google Auth URL');
+            this.logOperation('success', 'Generated Google Auth URL', { 
+                urlLength: url.length,
+                urlStart: url.substring(0, 30) + '...'
+            });
             return url;
         } catch (error) {
-            this.logOperation('error', `Failed to generate auth URL: ${(error as Error).message}`);
+            this.logOperation('error', `Failed to generate auth URL: ${(error as Error).message}`, error);
             throw error;
         }
     }
@@ -134,55 +203,95 @@ export class GoogleDriveService {
      */
     async exchangeCodeForTokens(code: string) {
         try {
-            this.logOperation('start', 'Exchanging code for tokens');
+            this.logOperation('start', 'Exchanging code for tokens', { 
+                codeLength: code ? code.length : 0,
+                codeStart: code ? code.substring(0, 10) + '...' : null 
+            });
 
             if (!this.CLIENT_ID || !this.CLIENT_SECRET || !this.REDIRECT_URI) {
+                const missingVars = [
+                    !this.CLIENT_ID ? 'CLIENT_ID' : null,
+                    !this.CLIENT_SECRET ? 'CLIENT_SECRET' : null,
+                    !this.REDIRECT_URI ? 'REDIRECT_URI' : null
+                ].filter(Boolean);
+                
+                this.logOperation('error', 'Missing Google OAuth credentials in environment variables', { missingVars });
                 throw new Error('Missing Google OAuth credentials in environment variables');
             }
 
             const oauth2Client = this.createOAuth2Client();
+            
+            // Using getToken to exchange code for tokens
+            this.logOperation('debug', 'Calling getToken method', { 
+                client_id: this.CLIENT_ID.substring(0, 5) + '...',
+                redirect_uri: this.REDIRECT_URI
+            });
+            
             const { tokens } = await oauth2Client.getToken(code);
+            
+            this.logOperation('debug', 'Token exchange response received', {
+                hasAccessToken: !!tokens.access_token,
+                hasRefreshToken: !!tokens.refresh_token,
+                hasExpiry: !!tokens.expiry_date,
+                scope: tokens.scope
+            });
 
             if (!tokens.refresh_token) {
+                this.logOperation('error', 'No refresh token returned', {
+                    possibleCause: 'Make sure you set prompt=consent and access_type=offline',
+                    receivedScopes: tokens.scope
+                });
                 throw new Error('No refresh token returned. Make sure you set prompt=consent and access_type=offline');
             }
 
-            this.logOperation('success', 'Successfully exchanged code for tokens');
+            this.logOperation('success', 'Successfully exchanged code for tokens', {
+                tokenType: tokens.token_type,
+                scopes: tokens.scope?.split(' '),
+                expiresIn: tokens.expiry_date ? Math.floor((tokens.expiry_date - Date.now()) / 1000) : 'unknown'
+            });
+            
             return tokens;
         } catch (error) {
-            this.logOperation('error', `Failed to exchange code for tokens: ${(error as Error).message}`);
+            this.logOperation('error', `Failed to exchange code for tokens: ${(error as Error).message}`, error);
             throw error;
         }
     }
 
     /**
      * Upload a file to Google Drive
-     * @param refreshToken - OAuth refresh token
+     * @param userId - The user's ID (used to get OAuth token)
      * @param file - Blob or File to upload
      * @param metadata - File metadata including performance/rehearsal info
      * @param thumbnail - Optional thumbnail blob
      * @returns Upload result with file and thumbnail IDs
      */
     async uploadFile(
-        refreshToken: string,
+        userId: string,
         file: Blob,
         metadata: DriveMetadata,
         thumbnail?: Blob
     ): Promise<FileUploadResult> {
         try {
-            this.logOperation('start', 'Uploading file to Google Drive');
+            this.logOperation('start', 'Uploading file to Google Drive', { userId });
 
-            // Get an access token using the refresh token
-            const accessToken = await this.getAccessToken(refreshToken);
+            // Get OAuth client for this user
+            const oauth2Client = await this.getUserAuthClient(userId);
+            
+            if (!oauth2Client) {
+                throw new Error('Failed to get OAuth client for user');
+            }
+            
+            // Use the OAuth client for Drive API
+            const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
             // Create a root folder for the app if it doesn't exist
             this.logOperation('progress', 'Ensuring root folder exists');
-            const rootFolderId = await this.ensureRootFolder(accessToken);
+            const rootFolderId = await this.ensureRootFolder(drive);
 
             // Create a folder for this performance if needed
             this.logOperation('progress', 'Ensuring performance folder exists');
             const performanceFolderId = await this.ensurePerformanceFolder(
-                accessToken,
+                drive,
                 rootFolderId,
                 metadata.performanceId || 'default',
                 metadata.title || 'Untitled Performance'
@@ -194,7 +303,7 @@ export class GoogleDriveService {
             // Upload the main file
             this.logOperation('progress', `Uploading file "${fileName}"`);
             const fileId = await this.uploadFileToFolder(
-                accessToken,
+                drive,
                 file,
                 performanceFolderId,
                 fileName,
@@ -206,7 +315,7 @@ export class GoogleDriveService {
             if (thumbnail) {
                 this.logOperation('progress', 'Uploading thumbnail');
                 thumbnailId = await this.uploadFileToFolder(
-                    accessToken,
+                    drive,
                     thumbnail,
                     performanceFolderId,
                     `${fileName} - Thumbnail`,
@@ -217,11 +326,11 @@ export class GoogleDriveService {
             // Add metadata as properties to the file
             if (fileId) {
                 this.logOperation('progress', 'Adding metadata to file');
-                await this.addMetadataToFile(accessToken, fileId, metadata);
+                await this.addMetadataToFile(drive, fileId, metadata);
             }
 
             // Get the web view link
-            const webViewLink = await this.getFileWebViewLink(accessToken, fileId);
+            const webViewLink = await this.getFileWebViewLink(drive, fileId);
 
             this.logOperation('success', `File uploaded successfully with ID: ${fileId}`);
             return {
@@ -232,7 +341,7 @@ export class GoogleDriveService {
                 webViewLink
             };
         } catch (error) {
-            this.logOperation('error', `Failed to upload file: ${(error as Error).message}`);
+            this.logOperation('error', `Failed to upload file: ${(error as Error).message}`, error);
             throw error;
         }
     }
@@ -351,7 +460,7 @@ export class GoogleDriveService {
 
     /**
      * Upload a file to a specific folder
-     * @param accessToken - OAuth access token
+     * @param drive - Google Drive API object
      * @param blob - File contents as Blob
      * @param folderId - Target folder ID
      * @param name - File name
@@ -359,7 +468,7 @@ export class GoogleDriveService {
      * @returns ID of the uploaded file
      */
     private async uploadFileToFolder(
-        accessToken: string,
+        drive: any,
         blob: Blob,
         folderId: string,
         name: string,
@@ -384,7 +493,7 @@ export class GoogleDriveService {
             {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
                 },
                 body: form
             }
@@ -401,16 +510,16 @@ export class GoogleDriveService {
 
     /**
      * Ensure a root folder exists for all app files
-     * @param accessToken - OAuth access token
+     * @param drive - Google Drive API object
      * @returns ID of the root folder
      */
-    private async ensureRootFolder(accessToken: string): Promise<string> {
+    private async ensureRootFolder(drive: any): Promise<string> {
         // Check if the folder already exists
         const searchResponse = await fetch(
             `https://www.googleapis.com/drive/v3/files?q=name='${this.ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
             {
                 headers: {
-                    Authorization: `Bearer ${accessToken}`
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
                 }
             }
         );
@@ -434,7 +543,7 @@ export class GoogleDriveService {
             {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -485,14 +594,14 @@ export class GoogleDriveService {
 
     /**
      * Ensure a folder exists for a specific performance
-     * @param accessToken - OAuth access token
+     * @param drive - Google Drive API object
      * @param parentId - Parent folder ID
      * @param performanceId - Performance identifier
      * @param performanceTitle - Performance title
      * @returns ID of the performance folder
      */
     private async ensurePerformanceFolder(
-        accessToken: string,
+        drive: any,
         parentId: string,
         performanceId: string,
         performanceTitle: string
@@ -504,7 +613,7 @@ export class GoogleDriveService {
             `https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
             {
                 headers: {
-                    Authorization: `Bearer ${accessToken}`
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
                 }
             }
         );
@@ -528,7 +637,7 @@ export class GoogleDriveService {
             {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -549,12 +658,12 @@ export class GoogleDriveService {
 
     /**
      * Add metadata to a file
-     * @param accessToken - OAuth access token
+     * @param drive - Google Drive API object
      * @param fileId - ID of the file
      * @param metadata - Metadata key-value pairs
      */
     private async addMetadataToFile(
-        accessToken: string,
+        drive: any,
         fileId: string,
         metadata: DriveMetadata
     ): Promise<void> {
@@ -573,7 +682,7 @@ export class GoogleDriveService {
             {
                 method: 'PATCH',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -589,17 +698,20 @@ export class GoogleDriveService {
 
     /**
      * Get the web view link for a file
-     * @param accessToken - OAuth access token
+     * @param drive - Google Drive API object
      * @param fileId - ID of the file
      * @returns Web view link or empty string if not found
      */
-    private async getFileWebViewLink(accessToken: string, fileId: string): Promise<string> {
+    private async getFileWebViewLink(
+        drive: any,
+        fileId: string
+    ): Promise<string | undefined> {
         try {
             const response = await fetch(
                 `https://www.googleapis.com/drive/v3/files/${fileId}?fields=webViewLink`,
                 {
                     headers: {
-                        Authorization: `Bearer ${accessToken}`
+                        Authorization: `Bearer ${drive.auth.credentials.access_token}`
                     }
                 }
             );
@@ -612,35 +724,103 @@ export class GoogleDriveService {
             return data.webViewLink || '';
         } catch (error) {
             this.logOperation('error', `Failed to get web view link: ${(error as Error).message}`);
-            return '';
+            return undefined;
         }
     }
 
     /**
-     * Log operation for debugging and monitoring
-     * @param level - Log level (start, progress, success, error, info)
-     * @param message - Log message
+     * Helper method for logging operations with timestamps and structured data
      */
-    private logOperation(level: 'start' | 'progress' | 'success' | 'error' | 'info', message: string): void {
+    private logOperation(level: 'start' | 'progress' | 'success' | 'error' | 'info' | 'debug', message: string, data?: any): void {
         const timestamp = new Date().toISOString();
-        const prefix = '[GoogleDriveService]';
+        const prefix = `[${timestamp}][GoogleDriveService][${level.toUpperCase()}]`;
+        
+        // For important levels, always log with data
+        if (['error', 'start', 'success'].includes(level)) {
+            console.log(`${prefix} ${message}`, data ? JSON.stringify(data, null, 2) : '');
+        } else {
+            // For less important levels, only log data if debugging is enabled
+            const isDebugMode = process.env.DEBUG?.includes('google') || process.env.DEBUG === '*';
+            console.log(`${prefix} ${message}`, isDebugMode && data ? JSON.stringify(data, null, 2) : '');
+        }
+        
+        // Additional error tracking for improved diagnostics
+        if (level === 'error') {
+            try {
+                if (typeof data === 'object' && data !== null) {
+                    // Extract Google API error details if available
+                    const googleError = data.response?.data?.error;
+                    if (googleError) {
+                        console.error(`${prefix} Google API Error:`, {
+                            code: googleError.code,
+                            status: googleError.status,
+                            message: googleError.message,
+                            errors: googleError.errors
+                        });
+                    }
+                    
+                    // Check for OAuth specific errors
+                    if (data.response?.status === 401) {
+                        console.error(`${prefix} OAuth Authorization Error: Token might be invalid or expired`);
+                    } else if (data.response?.status === 403) {
+                        console.error(`${prefix} OAuth Permission Error: Insufficient permissions or scope`);
+                    }
+                }
+            } catch (loggingError) {
+                console.error(`${prefix} Error processing error details:`, loggingError);
+            }
+        }
+    }
 
-        switch (level) {
-            case 'start':
-                console.log(`${timestamp} ${prefix} 🚀 ${message}`);
-                break;
-            case 'progress':
-                console.log(`${timestamp} ${prefix} ⏳ ${message}`);
-                break;
-            case 'success':
-                console.log(`${timestamp} ${prefix} ✅ ${message}`);
-                break;
-            case 'error':
-                console.error(`${timestamp} ${prefix} ❌ ${message}`);
-                break;
-            case 'info':
-                console.info(`${timestamp} ${prefix} ℹ️ ${message}`);
-                break;
+    /**
+     * Get a Google Auth client for a specific user
+     * This abstracts the token acquisition
+     * @param userId - The user's ID
+     * @returns The OAuth2 client
+     */
+    private async getUserAuthClient(userId: string): Promise<OAuth2Client | null> {
+        try {
+            // Import the entire module and use its exported function
+            const googleAuth = await import('@/lib/googleAuth');
+            
+            try {
+                return await googleAuth.getUserGoogleAuthClient(userId);
+            } catch (authError) {
+                // Enhanced error handling with diagnostics
+                const errorMessage = authError instanceof Error ? authError.message : String(authError);
+                
+                // Check for specific error types to provide better error messages
+                const needsReconnect = errorMessage.includes('reconnect') || 
+                                      errorMessage.includes('No Google access token');
+                
+                if (needsReconnect) {
+                    this.logOperation('error', 'User needs to reconnect Google account', {
+                        userId,
+                        action: 'reconnect_required',
+                        originalError: errorMessage
+                    });
+                } else {
+                    this.logOperation('error', `Google Auth client creation failed: ${errorMessage}`, {
+                        userId,
+                        error: authError,
+                        stack: authError instanceof Error ? authError.stack : null
+                    });
+                }
+                
+                // Rethrow to allow the caller to handle it
+                throw authError;
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
+            this.logOperation('error', `Failed to get OAuth client: ${errorMessage}`, {
+                userId,
+                errorType: error instanceof Error ? error.name : 'UnknownError',
+                stack: error instanceof Error ? error.stack : null,
+                isTokenIssue: errorMessage.includes('token') || errorMessage.includes('OAuth') || errorMessage.includes('auth')
+            });
+            
+            return null;
         }
     }
 }

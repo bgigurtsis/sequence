@@ -34,7 +34,9 @@ const DropdownPortal: React.FC<DropdownPortalProps> = ({
   useEffect(() => {
     // Close dropdown when clicking outside
     const handleOutsideClick = (e: MouseEvent) => {
-      if (isOpen && !e.target.closest('.recording-options-content')) {
+      // Make sure e.target is not null and cast it to Element to use closest()
+      const target = e.target as Element;
+      if (isOpen && target && !target.closest('.recording-options-content')) {
         onClose();
       }
     };

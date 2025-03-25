@@ -5,6 +5,8 @@ import './globals.css';
 import { GoogleDriveProvider } from '@/contexts/GoogleDriveContext';
 import AuthCheck from '@/components/AuthCheck';
 import { SyncIndicator } from '@/components/SyncIndicator';
+import { registerGlobalValidationFunctions } from '@/lib/sessionUtils';
+import { useEffect } from 'react';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -42,6 +44,13 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  // Register global validation functions for session management
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      registerGlobalValidationFunctions();
+    }
+  }, []);
+
   return (
     <ClerkProvider>
       <GoogleDriveProvider>

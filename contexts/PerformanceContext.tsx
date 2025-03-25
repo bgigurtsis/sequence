@@ -6,6 +6,7 @@ import { Performance, Rehearsal, Recording, Metadata, Collection } from '../type
 import { videoStorage } from '../services/videoStorage';
 import { syncService } from '../services/syncService';
 import { generateId } from '../lib/utils';
+import { validateAllTokensWithRetry, logWithTimestamp } from '@/lib/sessionUtils';
 
 interface PerformanceContextType {
   // State
@@ -59,7 +60,7 @@ interface PerformanceContextType {
   addRehearsal: (data: { title: string; location: string; date: string }) => void;
   updateRehearsal: (data: { title: string; location: string; date: string }) => void;
   deleteRehearsal: () => Promise<void>;
-  addRecording: (rehearsalId: string, videoBlob: Blob, thumbnailBlob: Blob, metadata: Metadata) => Promise<string>;
+  addRecording: (rehearsalId: string, videoBlob: Blob, thumbnail: Blob | string, metadata?: Partial<Metadata>) => Promise<string>;
   updateRecordingMetadata: (metadata: Metadata) => void;
   deleteRecording: () => Promise<void>;
   handlePreRecordingMetadataSubmit: (metadata: Metadata) => void;
@@ -527,186 +528,283 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
   // Upload to Google Drive
   async function uploadToDrive(videoBlob: Blob, thumbnail: Blob | string, metadata: Metadata) {
-    const formData = new FormData();
-    formData.append('video', videoBlob, `${metadata.title}.mp4`);
+    try {
+      // Validate session and tokens before starting upload
+      if (typeof window !== 'undefined' && window.validateAllTokensForRecording) {
+        console.log('Validating all tokens before upload attempt');
+        const tokensValid = await window.validateAllTokensForRecording();
+        
+        if (!tokensValid) {
+          console.error('Token validation failed before upload. Sessions may have expired.');
+          
+          // Show a more helpful error to the user
+          const errorMessage = 'Your session has expired. Please refresh the page and try again.';
+          alert(errorMessage);
+          
+          throw new Error('Session expired during upload');
+        }
+      }
+      
+      const formData = new FormData();
+      formData.append('video', videoBlob, `${metadata.title}.mp4`);
 
-    // If thumbnail is a string (base64), convert to Blob
-    let thumbnailBlob: Blob;
-    if (typeof thumbnail === 'string') {
-      const response = await fetch(thumbnail);
-      thumbnailBlob = await response.blob();
-      formData.append('thumbnail', thumbnailBlob, `${metadata.title}_thumb.jpg`);
-    } else {
-      formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
+      // If thumbnail is a string (base64), convert to Blob
+      let thumbnailBlob: Blob;
+      if (typeof thumbnail === 'string') {
+        const response = await fetch(thumbnail);
+        thumbnailBlob = await response.blob();
+        formData.append('thumbnail', thumbnailBlob, `${metadata.title}_thumb.jpg`);
+      } else {
+        formData.append('thumbnail', thumbnail, `${metadata.title}_thumb.jpg`);
+      }
+
+      const performance = selectedPerformance;
+      const performanceTitle = performance ? performance.title : 'Untitled Performance';
+      let rehearsalTitle = 'Untitled Rehearsal';
+      if (selectedPerformance) {
+        const reh = selectedPerformance.rehearsals.find((r) => r.id === metadata.rehearsalId);
+        if (reh) rehearsalTitle = reh.title;
+      }
+
+      formData.append('performanceId', selectedPerformanceId);
+      formData.append('performanceTitle', performanceTitle);
+      formData.append('rehearsalId', metadata.rehearsalId);
+      formData.append('rehearsalTitle', rehearsalTitle);
+      formData.append('recordingTitle', metadata.title);
+
+      // Add error handling with retry for transient issues
+      let retries = 2;
+      let success = false;
+      let lastError: Error | null = null;
+      
+      while (retries >= 0 && !success) {
+        try {
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData,
+            credentials: 'include',
+            headers: {
+              'Accept': 'application/json',
+            },
+          });
+
+          if (!res.ok) {
+            // Check for specific error status codes
+            if (res.status === 401 || res.status === 403) {
+              // Session/auth errors
+              console.error('Authentication error during upload, status:', res.status);
+              
+              // Try one session refresh before failing
+              if (retries > 0 && typeof window !== 'undefined' && window.validateAllTokensForRecording) {
+                console.log('Attempting token refresh before retry');
+                await window.validateAllTokensForRecording();
+              } else {
+                throw new Error('Session expired during upload');
+              }
+            } else if (res.status >= 500) {
+              // Server errors - may be temporary
+              console.error('Server error during upload, will retry. Status:', res.status);
+              
+              // Wait before retrying for server errors
+              if (retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              } else {
+                throw new Error(`Upload failed: Server error (${res.status})`);
+              }
+            } else {
+              // Other client errors - likely not fixable by retry
+              const errorText = await res.text();
+              throw new Error(`Upload failed: ${res.status} - ${errorText || 'Unknown error'}`);
+            }
+          } else {
+            // Success case
+            success = true;
+            return res.json();
+          }
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          console.error(`Upload attempt failed (${retries} retries left):`, lastError);
+        }
+        
+        retries--;
+      }
+      
+      // If we get here, all attempts failed
+      throw lastError || new Error('Upload failed after multiple attempts');
+    } catch (error) {
+      console.error('Error during upload:', error);
+      throw error;
     }
-
-    const performance = selectedPerformance;
-    const performanceTitle = performance ? performance.title : 'Untitled Performance';
-    let rehearsalTitle = 'Untitled Rehearsal';
-    if (selectedPerformance) {
-      const reh = selectedPerformance.rehearsals.find((r) => r.id === metadata.rehearsalId);
-      if (reh) rehearsalTitle = reh.title;
-    }
-
-    formData.append('performanceId', selectedPerformanceId);
-    formData.append('performanceTitle', performanceTitle);
-    formData.append('rehearsalId', metadata.rehearsalId);
-    formData.append('rehearsalTitle', rehearsalTitle);
-    formData.append('recordingTitle', metadata.title);
-
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      throw new Error('Upload failed');
-    }
-
-    return res.json();
   }
 
   // Add recording (from any source)
   const addRecording = async (
     rehearsalId: string,
     videoBlob: Blob,
-    thumbnailBlob: Blob,
-    metadata: Metadata
+    thumbnail: Blob | string,
+    metadata: Partial<Metadata> = {}
   ): Promise<string> => {
-    // Check authentication before proceeding
-    const isAuthenticated = await checkAuthentication();
-    if (!isAuthenticated) {
-      console.error('Cannot add recording: User is not authenticated');
-      return '';
-    }
-
-    console.log('Adding recording:', { rehearsalId, metadata });
-
-    if (!rehearsalId) {
-      console.error('Cannot add recording: Missing rehearsalId');
-      throw new Error('Missing rehearsalId');
-    }
-
     try {
-      // Find performance ID
-      const performanceId = findPerformanceIdByRehearsalId(rehearsalId);
+      // Validate session before proceeding
+      let isAuthenticated = false;
+      
+      // Attempt validation using the most comprehensive method
+      try {
+        logWithTimestamp('UPLOAD', 'Validating session before adding recording');
+        isAuthenticated = await validateAllTokensWithRetry(3);
+        
+        if (!isAuthenticated) {
+          logWithTimestamp('ERROR', 'Session validation failed, cannot add recording');
+          throw new Error('Session validation failed. Please refresh your session and try again.');
+        }
+      } catch (validationError) {
+        logWithTimestamp('ERROR', 'Error validating session before recording', validationError);
+        throw new Error('Error validating your session. Please refresh the page and try again.');
+      }
+      
+      // Continue with adding the recording now that we have validated the session
+      console.log('Adding recording:', { rehearsalId, metadata });
+
+      if (!rehearsalId) {
+        console.error('Cannot add recording: Missing rehearsalId');
+        throw new Error('Missing rehearsalId');
+      }
+
+      // Find the performance this rehearsal belongs to
+      const performanceId = Object.keys(performances).find(
+        (perfId) => rehearsalId in performances[perfId].rehearsals
+      );
+
       if (!performanceId) {
-        throw new Error('Could not find performance for rehearsal');
+        console.error(`Cannot find performance for rehearsal ${rehearsalId}`);
+        throw new Error(`Cannot find performance for rehearsal ${rehearsalId}`);
       }
 
       // Generate URLs for video and thumbnail
       const videoUrl = URL.createObjectURL(videoBlob);
-      const thumbnailUrl = URL.createObjectURL(thumbnailBlob);
+      
+      // Handle different thumbnail types
+      let thumbnailUrl: string;
+      if (typeof thumbnail === 'string') {
+        // If it's already a string (likely a data URL), use it directly
+        thumbnailUrl = thumbnail;
+      } else {
+        // Otherwise create a blob URL
+        thumbnailUrl = URL.createObjectURL(thumbnail);
+      }
 
       console.log('Generated URLs:', { videoUrl, thumbnailUrl });
 
-      // Find the performance and rehearsal
-      const performance = performances.find(p => p.id === performanceId);
+      // Get relevant state
+      const performance = performances[performanceId];
+      const rehearsal = performance.rehearsals[rehearsalId];
 
-      if (!performance) {
-        console.error('Cannot add recording: Performance not found for rehearsal', rehearsalId);
-        throw new Error('Performance not found');
-      }
-
-      const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
-      if (!rehearsal) {
-        console.error('Cannot add recording: Rehearsal not found', rehearsalId);
-        throw new Error('Rehearsal not found');
-      }
-
-      console.log('Found performance and rehearsal:', {
-        performanceId,
-        performanceTitle: performance.title,
+      // Create recording object
+      const defaultMetadata: Metadata = {
+        title: metadata.title || `Recording ${rehearsal.recordings.length + 1}`,
+        time: metadata.time || new Date().toISOString(),
+        performers: metadata.performers || [],
+        tags: metadata.tags || [],
         rehearsalId,
-        rehearsalTitle: rehearsal.title
+        notes: metadata.notes || '',
+      };
+
+      // Merge default metadata with provided metadata
+      const mergedMetadata: Metadata = {
+        ...defaultMetadata,
+        ...metadata,
+        rehearsalId, // Ensure these are always set correctly
+      };
+
+      const newRecording: Recording = {
+        id: generateId(),
+        title: mergedMetadata.title,
+        time: mergedMetadata.time,
+        videoUrl,
+        thumbnailUrl,
+        performers: mergedMetadata.performers,
+        rehearsalId,
+        tags: mergedMetadata.tags || [],
+        notes: mergedMetadata.notes || '',
+      };
+
+      console.log('Created new recording:', newRecording);
+
+      // Update state
+      const newRehearsal = {
+        ...rehearsal,
+        recordings: [...rehearsal.recordings, newRecording.id],
+      };
+
+      const newPerformance = {
+        ...performance,
+        rehearsals: {
+          ...performance.rehearsals,
+          [rehearsalId]: newRehearsal,
+        },
+        recordings: {
+          ...performance.recordings,
+          [newRecording.id]: newRecording,
+        },
+      };
+
+      setPerformances(prevPerformances => {
+        return prevPerformances.map(perf =>
+          perf.id === performanceId ? newPerformance : perf
+        );
       });
 
-      // Create recording object with full metadata
-      const newRecording: Recording = {
-        id: 'rec-' + Date.now(),
-        title: metadata.title || 'Untitled Recording',
-        time: metadata.time || new Date().toLocaleTimeString(),
-        performers: metadata.performers || [],
-        notes: metadata.notes,
-        rehearsalId: rehearsalId,
-        videoUrl: videoUrl,
-        thumbnailUrl: thumbnailUrl,
-        tags: metadata.tags || [],
-        sourceType: 'recorded',
-        localCopyAvailable: true,
-        createdAt: new Date().toISOString(),
-        syncStatus: 'pending',
-        performanceTitle: performance.title,
-        rehearsalTitle: rehearsal.title,
-        date: new Date().toISOString(),
-      };
+      console.log('Updated state with new recording');
 
-      console.log('Created new recording object:', newRecording);
+      // Save updated performance to local storage
+      try {
+        await videoStorage.saveVideo(
+          newRecording.id,
+          videoBlob,
+          typeof thumbnail === 'string' ? await convertDataUrlToBlob(thumbnail) : thumbnail,
+          {
+            title: newRecording.title,
+            time: newRecording.time,
+            performers: newRecording.performers,
+            tags: newRecording.tags,
+            notes: newRecording.notes,
+          }
+        );
 
-      // Update rehearsal with new recording
-      const updatedRehearsals = rehearsal.recordings
-        ? [...rehearsal.recordings, newRecording]
-        : [newRecording];
+        console.log('Saved recording to storage');
+      } catch (storageError) {
+        console.error('Error saving to storage:', storageError);
+        // Continue execution even if storage fails
+      }
 
-      const updatedRehearsal = {
-        ...rehearsal,
-        recordings: updatedRehearsals
-      };
-
-      // Update performance with updated rehearsal
-      const updatedPerformance = {
-        ...performance,
-        rehearsals: performance.rehearsals.map(r =>
-          r.id === rehearsalId ? updatedRehearsal : r
-        )
-      };
-
-      // Update performances state
-      const updatedPerformances = performances.map(p =>
-        p.id === performanceId ? updatedPerformance : p
-      );
-
-      console.log('Updating performances with new recording');
-      updatePerformances(updatedPerformances);
-
-      // Save video to local storage
-      await videoStorage.saveVideo(
-        newRecording.id,
-        videoBlob,
-        thumbnailBlob,
-        {
-          title: newRecording.title,
-          performanceId: performanceId!,
+      // Queue upload to server
+      try {
+        await syncService.queueRecording(
+          performanceId,
+          performance.title || 'Untitled Performance',
           rehearsalId,
-          createdAt: new Date().toISOString(),
-          performers: newRecording.performers,
-          tags: newRecording.tags
-        }
-      );
-      console.log('Video saved to local storage');
+          videoBlob,
+          typeof thumbnail === 'string' ? await convertDataUrlToBlob(thumbnail) : thumbnail,
+          {
+            title: newRecording.title,
+            time: newRecording.time,
+            performers: newRecording.performers,
+            tags: newRecording.tags || [],
+            notes: newRecording.notes || '',
+            rehearsalId: rehearsalId,
+            rehearsalTitle: rehearsal.title || 'Untitled Rehearsal'
+          }
+        );
 
-      // Queue for server sync
-      syncService.queueRecording(
-        performanceId!,
-        performance.title,
-        rehearsalId,
-        videoBlob,
-        thumbnailBlob,
-        {
-          title: newRecording.title,
-          time: newRecording.time,
-          performers: newRecording.performers,
-          notes: newRecording.notes,
-          rehearsalId: newRecording.rehearsalId,
-          tags: newRecording.tags,
-          rehearsalTitle: rehearsal.title
-        }
-      );
-      console.log('Recording queued for sync');
+        console.log('Queued recording for sync');
+      } catch (syncError) {
+        console.error('Error queuing for sync:', syncError);
+        // Continue execution even if sync fails
+      }
 
       return newRecording.id;
     } catch (error) {
-      console.error('Error adding recording:', error);
+      console.error('Error during recording:', error);
       throw error;
     }
   };
@@ -915,6 +1013,11 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
         return performance;
       });
     });
+  };
+
+  // Helper function to convert data URL to Blob
+  const convertDataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
+    return fetch(dataUrl).then(res => res.blob());
   };
 
   return (
