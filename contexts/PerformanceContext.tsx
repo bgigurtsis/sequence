@@ -672,7 +672,10 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       // Find the performance this rehearsal belongs to
       const performanceId = Object.keys(performances).find(
-        (perfId) => rehearsalId in performances[perfId].rehearsals
+        (perfId) => {
+          const performance = performances.find(p => p.id === perfId);
+          return performance && performance.rehearsals.some(r => r.id === rehearsalId);
+        }
       );
 
       if (!performanceId) {
@@ -695,79 +698,95 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       console.log('Generated URLs:', { videoUrl, thumbnailUrl });
 
-      // Get relevant state
-      const performance = performances[performanceId];
-      const rehearsal = performance.rehearsals[rehearsalId];
+      // Get relevant state using find instead of direct indexing
+      const performance = performances.find(p => p.id === performanceId);
+      if (!performance) {
+        throw new Error(`Performance ${performanceId} not found`);
+      }
+
+      const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
+      if (!rehearsal) {
+        throw new Error(`Rehearsal ${rehearsalId} not found in performance ${performanceId}`);
+      }
 
       // Create recording object
       const defaultMetadata: Metadata = {
-        title: metadata.title || `Recording ${rehearsal.recordings.length + 1}`,
-        time: metadata.time || new Date().toISOString(),
-        performers: metadata.performers || [],
-        tags: metadata.tags || [],
+        title: metadata?.title || `Recording ${rehearsal.recordings.length + 1}`,
+        time: metadata?.time || new Date().toISOString(),
+        performers: metadata?.performers || [],
+        tags: metadata?.tags || [],
         rehearsalId,
-        notes: metadata.notes || '',
+        notes: metadata?.notes || '',
+        date: metadata?.date || new Date().toISOString().split('T')[0], // Add date
       };
 
       // Merge default metadata with provided metadata
       const mergedMetadata: Metadata = {
         ...defaultMetadata,
-        ...metadata,
+        ...(metadata || {}),
         rehearsalId, // Ensure these are always set correctly
       };
 
+      // Create recording with all required fields
       const newRecording: Recording = {
         id: generateId(),
         title: mergedMetadata.title,
         time: mergedMetadata.time,
+        date: mergedMetadata.date || new Date().toISOString().split('T')[0], // Ensure date is included
         videoUrl,
         thumbnailUrl,
         performers: mergedMetadata.performers,
         rehearsalId,
         tags: mergedMetadata.tags || [],
         notes: mergedMetadata.notes || '',
+        sourceType: 'recorded', // Add required fields
       };
 
       console.log('Created new recording:', newRecording);
 
-      // Update state
-      const newRehearsal = {
-        ...rehearsal,
-        recordings: [...rehearsal.recordings, newRecording.id],
-      };
-
-      const newPerformance = {
-        ...performance,
-        rehearsals: {
-          ...performance.rehearsals,
-          [rehearsalId]: newRehearsal,
-        },
-        recordings: {
-          ...performance.recordings,
-          [newRecording.id]: newRecording,
-        },
-      };
-
-      setPerformances(prevPerformances => {
-        return prevPerformances.map(perf =>
-          perf.id === performanceId ? newPerformance : perf
-        );
+      // Update rehearsals and performances properly
+      const updatedPerformances = performances.map(p => {
+        if (p.id === performanceId) {
+          // Update this performance
+          return {
+            ...p,
+            rehearsals: p.rehearsals.map(r => {
+              if (r.id === rehearsalId) {
+                // Update this rehearsal
+                return {
+                  ...r,
+                  recordings: [...r.recordings, newRecording]
+                };
+              }
+              return r;
+            })
+          };
+        }
+        return p;
       });
+
+      // Update state
+      setPerformances(updatedPerformances);
 
       console.log('Updated state with new recording');
 
-      // Save updated performance to local storage
+      // Save to storage with correct parameter structure
       try {
+        const thumbnailBlob = typeof thumbnail === 'string' 
+          ? await convertDataUrlToBlob(thumbnail) 
+          : thumbnail;
+        
         await videoStorage.saveVideo(
           newRecording.id,
           videoBlob,
-          typeof thumbnail === 'string' ? await convertDataUrlToBlob(thumbnail) : thumbnail,
+          thumbnailBlob,
           {
             title: newRecording.title,
-            time: newRecording.time,
+            performanceId: performanceId,
+            rehearsalId: rehearsalId,
+            createdAt: new Date().toISOString(),
             performers: newRecording.performers,
-            tags: newRecording.tags,
-            notes: newRecording.notes,
+            tags: newRecording.tags || [],
           }
         );
 
@@ -779,12 +798,16 @@ export const PerformanceProvider: React.FC<{ children: ReactNode }> = ({ childre
 
       // Queue upload to server
       try {
+        const thumbnailBlob = typeof thumbnail === 'string' 
+          ? await convertDataUrlToBlob(thumbnail) 
+          : thumbnail;
+        
         await syncService.queueRecording(
           performanceId,
           performance.title || 'Untitled Performance',
           rehearsalId,
           videoBlob,
-          typeof thumbnail === 'string' ? await convertDataUrlToBlob(thumbnail) : thumbnail,
+          thumbnailBlob,
           {
             title: newRecording.title,
             time: newRecording.time,

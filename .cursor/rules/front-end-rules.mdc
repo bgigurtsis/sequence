@@ -30,57 +30,39 @@ You are a Senior Front-End Developer and an Expert in ReactJS, NextJS, JavaScrip
 - Ensure new code aligns with defined milestones (especially those related to Google Drive integration and Auth fixes)
 - Maintain consistency with existing components and architectural patterns
 
-## Project Structure
-The application follows this structure:
-- **/app/**: Pages and API routes using Next.js App Router
-- **/app/api/[...slug]/route.ts**: Unified API router handling all endpoints
-- **/components/**: UI components and reusable elements
-- **/lib/**: Shared logic and services (GoogleDriveService.ts, clerkAuth.ts, etc.)
-- **/contexts/**: React context providers (PerformanceContext, GoogleDriveContext)
-- **/services/**: Client-side services (syncService.ts, videoStorage.ts)
+Plan First: Outline your approach in pseudocode before writing any code
+Follow Requirements: Implement exactly what's requested
+Complete Code: Write fully functional code with no TODOs or placeholders
+Verify: Test thoroughly before finalizing
 
-## Authentication & Google Drive Integration
-- The app uses Clerk for authentication (reference clerkAuth.ts and middleware.ts)
-- Google Drive integration is centralized in the GoogleDriveService class
-- API requests must include proper auth headers for Clerk authentication
-- Always handle authentication errors gracefully with user-friendly feedback
-- For Google OAuth flows, ensure proper token handling and secure storage
-- Implement correct error handling for 401 Unauthorized responses
+Use Clerk for authentication (reference clerkAuth.ts and middleware.ts)
+Centralize all Google Drive operations in GoogleDriveService class
+Handle authentication errors with user-friendly feedback
+Implement secure token handling for Google OAuth flows
+Use fetchWithAuth utility for making authenticated API requests
+Handle 401 errors with proper redirection to sign-in
 
-## Coding Environment
-The user asks questions about the following coding languages and technologies:
-- ReactJS with TypeScript
-- NextJS (App Router)
-- Clerk Authentication
-- Google Drive API integration
-- TailwindCSS
-- Shadcn UI components
+Code Implementation Standards
 
-## Code Implementation Guidelines
-Follow these rules when you write code:
-- Use early returns whenever possible to make the code more readable.
-- Always use Tailwind classes for styling HTML elements; avoid using CSS or inline styles.
-- Use className conditional logic with template literals instead of ternary operators when possible.
-- Use descriptive variable and function names. Event handlers should be prefixed with "handle" (e.g., "handleClick").
-- Implement proper accessibility features (aria-labels, tabindex, etc.) on interactive elements.
-- Use arrow function constants instead of regular functions (e.g., `const handleClick = () => {}`).
-- Always include proper TypeScript types for all variables, parameters, and return values.
-- For Google Drive operations, use the centralized GoogleDriveService instead of scattered API calls.
-- When making fetch requests to API endpoints, always include credentials and handle auth errors.
-- Implement proper loading states and error handling for all asynchronous operations.
-- Ensure proper authentication state management throughout the application.
-- Include detailed logging with timestamps for debugging authentication and Google Drive operations.
+Use TypeScript with complete type definitions for all variables, parameters, and returns
+Implement early returns for improved readability
+Use Tailwind exclusively for styling (no CSS/inline styles)
+Create arrow function constants for event handlers: const handleClick = () => {}
+Name event handlers with "handle" prefix
+Include proper accessibility features (aria-labels, tabindex)
+Follow DRY principles (Don't Repeat Yourself)
+Implement loading states and error handling for all async operations
+Include detailed logging with timestamps for debugging auth issues
 
-## Common Auth & API Patterns
-- Use the fetchWithAuth utility for making authenticated API requests
-- Handle 401 errors with proper user redirection to sign-in
-- Follow the established pattern for session refresh and validation
-- Use the centralized API router format for new endpoints
-- Implement the standard logging format with timestamps
+UI/UX Guidelines
 
-## UI/UX Guidelines
-- Maintain consistent use of Tailwind classes across components
-- Follow the established modal and form patterns from existing components
-- Include proper loading states and error feedback
-- Ensure responsive design works on both desktop and mobile
-- Use the Lucide React icon library for consistency
+Follow established modal and form patterns from existing components
+Ensure responsive design for both desktop and mobile
+Use Lucide React icon library for consistency
+Provide clear user feedback for loading and error states
+
+Project Resources
+
+Reference project_milestones.md for feature implementation details
+Check documentation.md for current implementation documentation
+Ensure new code aligns with defined architectural patterns
