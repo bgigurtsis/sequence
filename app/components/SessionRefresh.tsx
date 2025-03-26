@@ -140,10 +140,23 @@ export default function SessionRefresh() {
                 setSessionStatus(newStatus);
                 setConsecutiveFailures(prev => prev + 1);
                 
-                // After 3 consecutive failures, redirect to sign in
+                // After 2 consecutive failures, redirect to sign in, but avoid multiple alerts
+                // by using sessionStorage to track when we've already shown a message
                 if (consecutiveFailures >= 2) {
-                    logWithTimestamp('AUTH', 'Too many consecutive failures, redirecting to sign-in');
-                    window.location.href = '/sign-in?session=expired';
+                    const lastAuthAlert = sessionStorage.getItem('lastAuthAlert');
+                    const now = new Date().getTime();
+                    
+                    // Only show alert and redirect if we haven't done so in the last minute
+                    if (!lastAuthAlert || now - parseInt(lastAuthAlert) > 60000) {
+                        // Store the current time to prevent multiple alerts
+                        sessionStorage.setItem('lastAuthAlert', now.toString());
+                        
+                        logWithTimestamp('AUTH', 'Too many consecutive failures, redirecting to sign-in');
+                        // Use router.push instead of direct location change to maintain SPA behavior
+                        router.push('/sign-in?session=expired');
+                    } else {
+                        logWithTimestamp('AUTH', 'Auth error already shown recently, not redirecting again');
+                    }
                 }
                 
                 return newStatus;

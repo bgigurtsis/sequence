@@ -283,14 +283,27 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
   tokenError?: string;
   needsReconnect: boolean;
 }> {
+  const checkId = Math.random().toString(36).substring(2, 8); // Create unique ID for this check
+  
   try {
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Starting OAuth status check for user ${userId.substring(0, 8)}...`);
     logWithTimestamp('OAuth', 'connectionStatus', `Getting detailed OAuth status for user ${userId}`);
     
     // Check if user exists in Clerk
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 1: Getting Clerk user data`);
+    const userStartTime = Date.now();
+    
     let user;
     try {
       user = await clerkClient.users.getUser(userId);
+      console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] User retrieved (took ${Date.now() - userStartTime}ms)`);
     } catch (userError) {
+      const errorMsg = userError instanceof Error ? userError.message : String(userError);
+      console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Error getting user from Clerk:`, {
+        error: errorMsg,
+        stack: userError instanceof Error ? userError.stack?.substring(0, 500) : null
+      });
+      
       logWithTimestamp('OAuth', 'ERROR', `Error getting user from Clerk: ${userId}`, userError);
       return {
         hasToken: false,
@@ -300,6 +313,8 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
         needsReconnect: true
       };
     }
+    
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 2: Checking for Google OAuth accounts`);
     
     // Multiple ways to check for Google OAuth accounts:
     // 1. Check email addresses with oauth_google verification strategy
@@ -319,6 +334,14 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     // Combine both checks
     const hasGoogleOAuth = hasGoogleOAuthViaEmail || hasGoogleOAuthViaExternalAccounts;
     
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] OAuth account detection:`, {
+      hasGoogleOAuthViaEmail,
+      hasGoogleOAuthViaExternalAccounts,
+      finalResult: hasGoogleOAuth,
+      emailCount: user.emailAddresses?.length || 0,
+      externalAccountCount: user.externalAccounts?.length || 0
+    });
+    
     logWithTimestamp('OAuth', 'connectionStatus', `User ${userId} OAuth detection:`, {
       hasGoogleOAuthViaEmail,
       hasGoogleOAuthViaExternalAccounts,
@@ -326,11 +349,24 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     });
     
     // Check OAuth token in wallet
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 3: Checking for Google OAuth token in wallet`);
+    const tokenStartTime = Date.now();
+    
     let tokenResult;
     try {
       tokenResult = await getGoogleOAuthToken(userId);
+      console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Token result received (took ${Date.now() - tokenStartTime}ms)`, {
+        hasToken: !!tokenResult?.token,
+        tokenLength: tokenResult?.token ? `${tokenResult.token.length} chars` : 0,
+        provider: tokenResult?.provider || 'unknown'
+      });
     } catch (tokenError) {
       const errorMessage = tokenError instanceof Error ? tokenError.message : 'Unknown token error';
+      
+      console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Error getting token:`, {
+        error: errorMessage,
+        stack: tokenError instanceof Error ? tokenError.stack?.substring(0, 500) : null
+      });
       
       logWithTimestamp('OAuth', 'ERROR', `Error getting token for user ${userId}`, {
         error: errorMessage,
@@ -348,6 +384,7 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     
     // Ensure we have a valid token result
     if (!tokenResult) {
+      console.warn(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Null token result`);
       logWithTimestamp('OAuth', 'connectionStatus', `Null token result for user ${userId}`);
       return {
         hasToken: false,
@@ -362,17 +399,27 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     const needsReconnect = hasGoogleOAuth && !tokenResult.token;
     
     if (needsReconnect) {
+      console.warn(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] User has Google OAuth account but no valid token - needs reconnect`);
       logWithTimestamp('OAuth', 'connectionStatus', `User ${userId} needs to reconnect Google OAuth`);
     }
     
-    return {
+    const finalResult = {
       hasToken: !!tokenResult.token,
       hasOAuthAccount: hasGoogleOAuth,
       provider: tokenResult.provider || 'google', // Default to 'google' if provider is missing
       needsReconnect
     };
+    
+    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] OAuth connection check complete:`, finalResult);
+    
+    return finalResult;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Unexpected error:`, {
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack?.substring(0, 500) : null
+    });
     
     logWithTimestamp('OAuth', 'ERROR', `Error checking detailed OAuth status for user ${userId}`, {
       errorMessage,

@@ -1,7 +1,7 @@
 'use client';
 
 import { SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
-import AuthCheck from '@/components/AuthCheck';
+import { AuthCheck } from '@/components/AuthCheck';   
 import { SyncIndicator } from '@/components/SyncIndicator';
 
 export default function Navigation() {

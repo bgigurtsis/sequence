@@ -50,15 +50,19 @@ export class GoogleDriveService {
      * @returns True if connection is working, false otherwise
      */
     async checkConnection(userId: string): Promise<boolean> {
+        const checkId = Math.random().toString(36).substring(2, 8); // Unique ID for this check
+        
         try {
-            this.logOperation('start', 'Checking Google Drive connection', { userId });
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] Starting connection check for userId: ${userId.substring(0, 5)}...`);
 
             // Create an OAuth client for this user
             // This will automatically get the token from Clerk's wallet
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating OAuth client and retrieving token...`);
             const oauth2Client = await this.getUserAuthClient(userId);
             
             if (!oauth2Client) {
-                this.logOperation('error', 'Failed to get OAuth client', { 
+                console.error(`[GoogleDriveService:checkConnection][${checkId}] Failed to get OAuth client - null returned`);
+                this.logOperation('error', `[${checkId}] Failed to get OAuth client`, { 
                     userId,
                     reason: 'OAuth client creation failed - likely a token issue'
                 });
@@ -66,8 +70,25 @@ export class GoogleDriveService {
             }
 
             // Check token validity directly
-            if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
-                this.logOperation('error', 'No access token in OAuth client credentials', {
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] Checking OAuth client credentials`);
+            
+            // Log credential existence but not the actual tokens
+            if (!oauth2Client.credentials) {
+                console.error(`[GoogleDriveService:checkConnection][${checkId}] OAuth client has no credentials object`);
+                throw new Error('No credentials in OAuth client');
+            }
+            
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] OAuth credentials available with properties:`, {
+                hasAccessToken: !!oauth2Client.credentials.access_token,
+                hasRefreshToken: !!oauth2Client.credentials.refresh_token,
+                hasExpiry: !!oauth2Client.credentials.expiry_date,
+                scope: oauth2Client.credentials.scope,
+                tokenType: oauth2Client.credentials.token_type
+            });
+            
+            if (!oauth2Client.credentials.access_token) {
+                console.error(`[GoogleDriveService:checkConnection][${checkId}] No access token in OAuth client credentials`);
+                this.logOperation('error', `[${checkId}] No access token in OAuth client credentials`, {
                     userId,
                     hasCredentials: !!oauth2Client.credentials,
                     credentialKeys: oauth2Client.credentials ? Object.keys(oauth2Client.credentials) : []
@@ -75,33 +96,49 @@ export class GoogleDriveService {
                 throw new Error('Missing Google access token');
             }
 
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating Google Drive client`);
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
             // With drive.file scope, we can't list all files, so instead:
             // 1. Try to create a test folder
             // 2. Then delete it if successful
-            this.logOperation('progress', 'Creating test folder');
+            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating test folder to verify API access`);
             
             try {
                 const testFolder = await drive.files.create({
                     requestBody: {
-                        name: 'StageVault_ConnectionTest',
+                        name: `StageVault_ConnectionTest_${checkId}`,
                         mimeType: 'application/vnd.google-apps.folder',
                     },
                     fields: 'id'
                 });
 
+                console.log(`[GoogleDriveService:checkConnection][${checkId}] Test folder created with response:`, {
+                    success: !!testFolder,
+                    status: testFolder.status,
+                    hasData: !!testFolder.data,
+                    folderId: testFolder?.data?.id ? `${testFolder.data.id.substring(0, 5)}...` : 'none'
+                });
+
                 if (testFolder?.data?.id) {
                     // Successfully created folder, now delete it
-                    this.logOperation('progress', 'Deleting test folder', { folderId: testFolder.data.id });
-                    await drive.files.delete({
+                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Deleting test folder ${testFolder.data.id.substring(0, 5)}...`);
+                    
+                    const deleteResponse = await drive.files.delete({
                         fileId: testFolder.data.id
                     });
-                    this.logOperation('success', 'Google Drive connection successful');
+                    
+                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Delete response:`, {
+                        status: deleteResponse.status,
+                        statusText: deleteResponse.statusText
+                    });
+                    
+                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Google Drive connection successful`);
                     return true;
                 }
 
-                this.logOperation('error', 'Failed to create test folder - incomplete response', {
+                console.error(`[GoogleDriveService:checkConnection][${checkId}] Failed to create test folder - incomplete response`);
+                this.logOperation('error', `[${checkId}] Failed to create test folder - incomplete response`, {
                     userId,
                     response: JSON.stringify(testFolder || {})
                 });
@@ -112,7 +149,13 @@ export class GoogleDriveService {
                 const errorStatus = (folderError as any)?.response?.status || 'unknown';
                 const errorDetails = (folderError as any)?.response?.data || {};
                 
-                this.logOperation('error', `Drive folder operation failed: ${errorMessage}`, {
+                console.error(`[GoogleDriveService:checkConnection][${checkId}] Drive folder operation failed:`, {
+                    message: errorMessage,
+                    status: errorStatus,
+                    details: JSON.stringify(errorDetails)
+                });
+                
+                this.logOperation('error', `[${checkId}] Drive folder operation failed: ${errorMessage}`, {
                     userId,
                     statusCode: errorStatus,
                     errorDetails,
@@ -130,12 +173,18 @@ export class GoogleDriveService {
                                errorMessage.includes('credentials') ||
                                errorMessage.includes('permission');
                                
-            this.logOperation('error', `Google Drive connection failed: ${errorMessage}`, {
+            console.error(`[GoogleDriveService:checkConnection][${checkId}] Google Drive connection failed:`, {
+                message: errorMessage,
+                isAuthError,
+                errorType: error instanceof Error ? error.name : 'Unknown',
+                errorStack: error instanceof Error ? error.stack?.substring(0, 500) : null
+            });
+            
+            this.logOperation('error', `[${checkId}] Google Drive connection failed: ${errorMessage}`, {
                 userId,
                 isAuthError,
                 errorType: error instanceof Error ? error.name : 'Unknown',
-                errorStack: error instanceof Error ? error.stack : null,
-                error: JSON.stringify(error, Object.getOwnPropertyNames(error as object), 2)
+                errorStack: error instanceof Error ? error.stack : null
             });
             
             return false;
@@ -757,28 +806,59 @@ export class GoogleDriveService {
      * @returns The OAuth2 client
      */
     private async getUserAuthClient(userId: string): Promise<OAuth2Client | null> {
+        const authId = Math.random().toString(36).substring(2, 8); // Unique ID for this auth process
+        
+        console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Creating auth client for userId: ${userId.substring(0, 5)}...`);
+        
         try {
             // Import the entire module and use its exported function
+            console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Importing googleAuth module...`);
             const googleAuth = await import('@/lib/googleAuth');
             
+            console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Calling getUserGoogleAuthClient...`);
+            const startTime = Date.now();
+            
             try {
-                return await googleAuth.getUserGoogleAuthClient(userId);
+                const client = await googleAuth.getUserGoogleAuthClient(userId);
+                const duration = Date.now() - startTime;
+                
+                // Check if client has credentials and log (without sensitive data)
+                const hasCredentials = !!client?.credentials;
+                const hasAccessToken = hasCredentials && !!client.credentials.access_token;
+                const hasRefreshToken = hasCredentials && !!client.credentials.refresh_token;
+                
+                console.log(`[GoogleDriveService:getUserAuthClient][${authId}] getUserGoogleAuthClient succeeded (took ${duration}ms)`, {
+                    success: !!client,
+                    hasCredentials,
+                    hasAccessToken,
+                    hasRefreshToken,
+                    tokenType: client?.credentials?.token_type || 'none'
+                });
+                
+                return client;
             } catch (authError) {
                 // Enhanced error handling with diagnostics
                 const errorMessage = authError instanceof Error ? authError.message : String(authError);
+                const duration = Date.now() - startTime;
+                
+                console.error(`[GoogleDriveService:getUserAuthClient][${authId}] getUserGoogleAuthClient failed (took ${duration}ms)`, {
+                    errorMessage,
+                    errorType: authError instanceof Error ? authError.name : 'Unknown',
+                    stack: authError instanceof Error ? authError.stack?.substring(0, 500) : null
+                });
                 
                 // Check for specific error types to provide better error messages
                 const needsReconnect = errorMessage.includes('reconnect') || 
                                       errorMessage.includes('No Google access token');
                 
                 if (needsReconnect) {
-                    this.logOperation('error', 'User needs to reconnect Google account', {
+                    this.logOperation('error', `[${authId}] User needs to reconnect Google account`, {
                         userId,
                         action: 'reconnect_required',
                         originalError: errorMessage
                     });
                 } else {
-                    this.logOperation('error', `Google Auth client creation failed: ${errorMessage}`, {
+                    this.logOperation('error', `[${authId}] Google Auth client creation failed: ${errorMessage}`, {
                         userId,
                         error: authError,
                         stack: authError instanceof Error ? authError.stack : null
@@ -791,7 +871,13 @@ export class GoogleDriveService {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             
-            this.logOperation('error', `Failed to get OAuth client: ${errorMessage}`, {
+            console.error(`[GoogleDriveService:getUserAuthClient][${authId}] Failed to get OAuth client:`, {
+                errorMessage,
+                errorType: error instanceof Error ? error.name : 'UnknownError',
+                stack: error instanceof Error ? error.stack?.substring(0, 500) : null
+            });
+            
+            this.logOperation('error', `[${authId}] Failed to get OAuth client: ${errorMessage}`, {
                 userId,
                 errorType: error instanceof Error ? error.name : 'UnknownError',
                 stack: error instanceof Error ? error.stack : null,

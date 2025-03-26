@@ -57,37 +57,53 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
     setIsRefreshingSession(true);
     setSessionError(null);
     
+    console.log('[VideoRecorder:validateSession] Starting validation with maxRetries:', maxRetries);
+    
     let attempt = 0;
     while (attempt < maxRetries) {
       try {
         // Try using the global validation function
         if (typeof window !== 'undefined' && window.validateAllTokensForRecording) {
-          console.log(`Session validation attempt ${attempt + 1} of ${maxRetries}`);
+          console.log(`[VideoRecorder:validateSession] Session validation attempt ${attempt + 1} of ${maxRetries}`);
+          
+          // Capture start time to measure validation duration
+          const startTime = Date.now();
           const tokensValid = await window.validateAllTokensForRecording();
+          const duration = Date.now() - startTime;
+          
+          console.log(`[VideoRecorder:validateSession] validateAllTokensForRecording returned: ${tokensValid} (took ${duration}ms)`);
           
           if (tokensValid) {
-            console.log('Session validation successful');
+            console.log('[VideoRecorder:validateSession] Session validation successful');
             setIsRefreshingSession(false);
             setValidationRetries(0);
             return true;
           }
           
-          console.warn(`Session validation attempt ${attempt + 1} failed, ${maxRetries - attempt - 1} retries left`);
+          console.warn(`[VideoRecorder:validateSession] Session validation attempt ${attempt + 1} failed, ${maxRetries - attempt - 1} retries left`);
         } else {
-          console.error('Global validation function not available');
+          console.error('[VideoRecorder:validateSession] Global validation function not available on window object');
           break; // No point retrying if function doesn't exist
         }
       } catch (error) {
-        console.error(`Session validation error on attempt ${attempt + 1}:`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : 'No stack trace available';
+        console.error(`[VideoRecorder:validateSession] Error during validation attempt ${attempt + 1}:`, {
+          message: errorMsg,
+          stack: errorStack,
+          error: JSON.stringify(error, Object.getOwnPropertyNames(error as object), 2)
+        });
       }
       
       // Wait between retries (increasing delay with each attempt)
       const delay = 500 * Math.pow(1.5, attempt);
+      console.log(`[VideoRecorder:validateSession] Waiting ${delay}ms before retry ${attempt + 1}`);
       await new Promise(resolve => setTimeout(resolve, delay));
       attempt++;
     }
     
     // All attempts failed or function not available
+    console.error('[VideoRecorder:validateSession] All validation attempts failed or function not available');
     setIsRefreshingSession(false);
     setValidationRetries(attempt);
     return false;
@@ -95,8 +111,10 @@ const VideoRecorder: React.FC<VideoRecorderProps> = ({ onRecordingComplete }) =>
 
   // Manual session refresh function
   const handleManualRefresh = async () => {
+    console.log('[VideoRecorder:handleManualRefresh] Starting manual session refresh');
     setSessionError(null);
     const success = await validateSession(3);
+    console.log('[VideoRecorder:handleManualRefresh] Manual refresh result:', success);
     if (success) {
       setSessionError(null);
     } else {

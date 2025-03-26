@@ -1,15 +1,23 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function LoginRedirect() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   
   useEffect(() => {
-    // Redirect from /login to /sign-in
-    router.replace('/sign-in');
-  }, [router]);
+    // Check if there's a session parameter
+    const sessionParam = searchParams?.get('session');
+    
+    // Redirect from /login to /sign-in, preserving the session parameter if present
+    if (sessionParam === 'expired') {
+      router.replace('/sign-in?session=expired');
+    } else {
+      router.replace('/sign-in');
+    }
+  }, [router, searchParams]);
   
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-4">

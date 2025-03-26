@@ -51,8 +51,15 @@ async function checkAllTokens(): Promise<{
     googleValid: boolean;
     error?: string;
 }> {
+    const checkId = Math.random().toString(36).substring(2, 8); // Generate a unique ID for this check
+    
+    console.log(`[AuthCheck:checkAllTokens][${checkId}] Starting token validation check`);
+    
     try {
         // First check if Clerk session is valid
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Step 1: Checking Clerk session`);
+        const sessionStartTime = Date.now();
+        
         const sessionResponse = await fetch('/api/auth/refresh-session', {
             method: 'GET',
             credentials: 'include',
@@ -63,22 +70,39 @@ async function checkAllTokens(): Promise<{
             }
         });
         
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Session response status: ${sessionResponse.status} (took ${Date.now() - sessionStartTime}ms)`);
+        
         // Parse session response
-        const sessionData = await sessionResponse.json().catch(() => ({ 
-            success: false, 
-            message: 'Could not parse response' 
-        }));
+        const sessionData = await sessionResponse.json().catch((err) => {
+            console.error(`[AuthCheck:checkAllTokens][${checkId}] Error parsing session response:`, err);
+            return { 
+                success: false, 
+                message: 'Could not parse response' 
+            };
+        });
+        
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Session data:`, {
+            success: sessionData.success,
+            userId: sessionData.userId ? sessionData.userId.substring(0, 5) + '...' : undefined,
+            message: sessionData.message
+        });
         
         // If session is invalid, don't bother checking Google
         if (!sessionResponse.ok || !sessionData.success) {
+            const errorMsg = `Session invalid: ${sessionData.message || sessionResponse.statusText}`;
+            console.error(`[AuthCheck:checkAllTokens][${checkId}] ${errorMsg}`);
+            
             return {
                 sessionValid: false,
                 googleValid: false,
-                error: `Session invalid: ${sessionData.message || sessionResponse.statusText}`
+                error: errorMsg
             };
         }
         
         // Session is valid, now check Google token
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Step 2: Checking Google token`);
+        const googleStartTime = Date.now();
+        
         const googleResponse = await fetch('/api/auth/google-status', {
             method: 'GET',
             credentials: 'include',
@@ -89,30 +113,59 @@ async function checkAllTokens(): Promise<{
             }
         });
         
-        // Parse Google response
-        const googleData = await googleResponse.json().catch(() => ({ 
-            connected: false,
-            message: 'Could not parse response' 
-        }));
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Google response status: ${googleResponse.status} (took ${Date.now() - googleStartTime}ms)`);
         
-        return {
+        // Parse Google response
+        const googleData = await googleResponse.json().catch((err) => {
+            console.error(`[AuthCheck:checkAllTokens][${checkId}] Error parsing Google response:`, err);
+            return { 
+                connected: false,
+                message: 'Could not parse response' 
+            };
+        });
+        
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Google data:`, {
+            connected: googleData.connected,
+            authenticated: googleData.authenticated,
+            session: googleData.session,
+            message: googleData.message,
+            code: googleData.code
+        });
+        
+        const result = {
             sessionValid: true,
             googleValid: googleResponse.ok && googleData.connected === true,
             error: !googleResponse.ok ? `Google token invalid: ${googleData.message || googleResponse.statusText}` : undefined
         };
+        
+        console.log(`[AuthCheck:checkAllTokens][${checkId}] Final result:`, result);
+        return result;
     } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[AuthCheck:checkAllTokens][${checkId}] Error during token check:`, {
+            message: errorMsg,
+            stack: error instanceof Error ? error.stack : 'No stack trace'
+        });
+        
         return {
             sessionValid: false,
             googleValid: false,
-            error: `Error checking tokens: ${error}`
+            error: `Error checking tokens: ${errorMsg}`
         };
     }
 }
 
 // Function to refresh all tokens (session and Google)
 async function refreshAllTokens(enforceGoogleCheck = false): Promise<boolean> {
+    const refreshId = Math.random().toString(36).substring(2, 8); // Generate a unique ID for this refresh
+    
+    console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Starting refresh with enforceGoogleCheck=${enforceGoogleCheck}`);
+    
     try {
         // Step 1: Refresh Clerk session
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Step 1: Refreshing Clerk session`);
+        const startTime = Date.now();
+        
         const sessionResponse = await fetch('/api/auth/refresh-session', {
             method: 'GET',
             credentials: 'include',
@@ -123,10 +176,21 @@ async function refreshAllTokens(enforceGoogleCheck = false): Promise<boolean> {
             }
         });
         
-        const sessionData = await sessionResponse.json().catch(() => ({}));
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Session refresh response status: ${sessionResponse.status} (took ${Date.now() - startTime}ms)`);
+        
+        const sessionData = await sessionResponse.json().catch((err) => {
+            console.error(`[AuthCheck:refreshAllTokens][${refreshId}] Error parsing session response:`, err);
+            return {};
+        });
+        
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Session data:`, {
+            success: sessionData.success,
+            userId: sessionData.userId ? sessionData.userId.substring(0, 5) + '...' : undefined,
+            message: sessionData.message
+        });
         
         if (!sessionResponse.ok || !sessionData.success) {
-            logWithTimestamp('ERROR', 'Failed to refresh session', { 
+            logWithTimestamp('ERROR', `[${refreshId}] Failed to refresh session`, { 
                 status: sessionResponse.status,
                 message: sessionData.message || 'Unknown error'
             });
@@ -135,10 +199,14 @@ async function refreshAllTokens(enforceGoogleCheck = false): Promise<boolean> {
         
         // Only enforce Google check if explicitly requested
         if (!enforceGoogleCheck) {
+            console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Google check not enforced, returning success=true`);
             return true;
         }
         
         // Step 2: Check Google token - just to make sure it's valid
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Step 2: Checking Google token`);
+        const googleStartTime = Date.now();
+        
         const googleResponse = await fetch('/api/auth/google-status', {
             method: 'GET',
             credentials: 'include',
@@ -149,21 +217,42 @@ async function refreshAllTokens(enforceGoogleCheck = false): Promise<boolean> {
             }
         });
         
-        const googleData = await googleResponse.json().catch(() => ({}));
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Google status response: ${googleResponse.status} (took ${Date.now() - googleStartTime}ms)`);
+        
+        const googleData = await googleResponse.json().catch((err) => {
+            console.error(`[AuthCheck:refreshAllTokens][${refreshId}] Error parsing Google response:`, err);
+            return {};
+        });
+        
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] Google data:`, {
+            connected: googleData.connected,
+            authenticated: googleData.authenticated,
+            session: googleData.session,
+            message: googleData.message,
+            code: googleData.code
+        });
         
         if (!googleResponse.ok || !googleData.connected) {
-            logWithTimestamp('ERROR', 'Google token invalid after refresh', {
+            logWithTimestamp('ERROR', `[${refreshId}] Google token invalid after refresh`, {
                 status: googleResponse.status,
                 connected: googleData.connected,
-                message: googleData.message || 'Unknown error'
+                message: googleData.message || 'Unknown error',
+                code: googleData.code
             });
             return false;
         }
         
         // All tokens refreshed and valid
+        console.log(`[AuthCheck:refreshAllTokens][${refreshId}] All tokens refreshed and valid`);
         return true;
     } catch (error) {
-        logWithTimestamp('ERROR', 'Error refreshing tokens', error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`[AuthCheck:refreshAllTokens][${refreshId}] Error refreshing tokens:`, {
+            message: errorMsg,
+            stack: error instanceof Error ? error.stack : 'No stack trace'
+        });
+        
+        logWithTimestamp('ERROR', `[${refreshId}] Error refreshing tokens`, error);
         return false;
     }
 }
@@ -177,123 +266,42 @@ declare global {
   }
 }
 
-export default function AuthCheck() {
-    const { isSignedIn, isLoaded } = useUser();
-    const router = useRouter();
-    const [isChecking, setIsChecking] = useState(false);
-    const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
-    const lastTokenCheck = useRef<number>(0);
-    const MIN_CHECK_INTERVAL = 30000; // 30 seconds between token checks
+// Create and export the AuthCheck component
+export function AuthCheck() {
+  const { isLoaded, isSignedIn, user } = useUser();
+  const router = useRouter();
+  const [isChecking, setIsChecking] = useState(false);
 
-    // Simplified check - now only runs once and relies on SessionRefresh for periodic checks
-    useEffect(() => {
-        if (!isLoaded) return;
+  useEffect(() => {
+    // Make the refresh and validation functions available globally
+    if (typeof window !== 'undefined') {
+      window.refreshBeforeCriticalOperation = refreshAllTokens;
+      window.validateAllTokensForRecording = async () => {
+        const result = await checkAllTokens();
+        return result.sessionValid && result.googleValid;
+      };
+      window.refreshSessionBeforeAction = async () => {
+        setIsChecking(true);
+        try {
+          await refreshAllTokens(true);
+        } catch (error) {
+          console.error('Error refreshing session:', error);
+        } finally {
+          setIsChecking(false);
+        }
+      };
+    }
 
-        // Only check sign-in state once on load, not periodically
-        const checkSession = async () => {
-            if (isChecking) return;
-            if (!isSignedIn) {
-                logWithTimestamp('SESSION', 'User not signed in, redirecting to sign-in page');
-                router.push('/sign-in');
-                return;
-            }
+    return () => {
+      // Clean up global functions when component unmounts
+      if (typeof window !== 'undefined') {
+        window.refreshBeforeCriticalOperation = undefined;
+        window.validateAllTokensForRecording = undefined;
+        window.refreshSessionBeforeAction = undefined;
+      }
+    };
+  }, []);
 
-            try {
-                setIsChecking(true);
-                
-                // Do a complete token check including Google
-                const now = Date.now();
-                if (now - lastTokenCheck.current >= MIN_CHECK_INTERVAL) {
-                    const tokenStatus = await checkAllTokens();
-                    lastTokenCheck.current = now;
-                    
-                    // Update google connection status
-                    setGoogleConnected(tokenStatus.googleValid);
-                    
-                    if (!tokenStatus.sessionValid) {
-                        logWithTimestamp('ERROR', 'Session invalid during check', { error: tokenStatus.error });
-                        
-                        // Clear local storage state and redirect to sign in
-                        sessionStorage.removeItem('lastSessionCheck');
-                        sessionStorage.removeItem('userId');
-                        sessionStorage.removeItem('sessionId');
-                        
-                        alert('Your session has expired. Please sign in again to continue.');
-                        router.push('/sign-in?session=expired');
-                        return;
-                    }
-
-                    logWithTimestamp('SESSION', 'Token check complete', { 
-                        sessionValid: tokenStatus.sessionValid,
-                        googleValid: tokenStatus.googleValid
-                    });
-                }
-                
-                // Store the last successful check time
-                sessionStorage.setItem('lastSessionCheck', new Date().toISOString());
-                
-                // Minimal log - we're relying on SessionRefresh for periodic checks
-                logWithTimestamp('SESSION', 'Initial session check completed');
-            } catch (error) {
-                logWithTimestamp('ERROR', 'Error checking session', error);
-            } finally {
-                setIsChecking(false);
-            }
-        };
-
-        // Check immediately on component mount
-        checkSession();
-
-        // Add handler for critical operations with enhanced token refresh
-        const handleCriticalOperation = async (enforceGoogleCheck = false): Promise<boolean> => {
-            logWithTimestamp('CRITICAL', 'Refreshing all tokens before critical operation', { enforceGoogleCheck });
-            
-            // First try using the existing mechanism for compatibility
-            if (window.refreshSessionBeforeAction) {
-                try {
-                    await window.refreshSessionBeforeAction();
-                } catch (error) {
-                    logWithTimestamp('ERROR', 'Error in legacy session refresh', error);
-                }
-            }
-            
-            // Now use our enhanced refresh that also checks Google token
-            try {
-                // Force a thorough refresh with Google token check
-                const success = await refreshAllTokens(enforceGoogleCheck);
-                
-                if (!success) {
-                    // In case of failure, try one more time with a short delay
-                    logWithTimestamp('WARNING', 'First token refresh attempt failed, retrying...');
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    return await refreshAllTokens(enforceGoogleCheck);
-                }
-                
-                return success;
-            } catch (error) {
-                logWithTimestamp('ERROR', 'Failed to refresh tokens', error);
-                return false;
-            }
-        };
-
-        // Expose more advanced function globally for critical operations 
-        // that includes Google token validation
-        // @ts-ignore - Adding to window
-        window.refreshBeforeCriticalOperation = handleCriticalOperation;
-        
-        // Add simpler function specifically for video recording operations
-        // that enforces Google token checks
-        // @ts-ignore - Adding to window
-        window.validateAllTokensForRecording = () => handleCriticalOperation(true);
-
-        return () => {
-            // @ts-ignore - Removing from window
-            delete window.refreshBeforeCriticalOperation;
-            // @ts-ignore - Removing from window
-            delete window.validateAllTokensForRecording;
-        };
-    }, [isLoaded, isSignedIn, router, isChecking]);
-
-    // This component doesn't render anything visible
-    return null;
-} 
+  // This component doesn't render anything visible
+  return null;
+}

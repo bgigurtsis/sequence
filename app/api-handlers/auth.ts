@@ -470,11 +470,23 @@ export async function refreshSession(request: NextRequest) {
     try {
         // Enhanced logging with timestamp
         const timestamp = new Date().toISOString();
-        const requestId = request.headers.get('x-request-id') || `refresh-${Date.now()}`;
+        const requestId = request.headers.get('x-request-id') || `refresh-${Date.now().toString(36).substring(2, 10)}`;
         const logPrefix = `[${timestamp}][AuthAPI][refreshSession][${requestId}]`;
         
+        console.log(`${logPrefix} Refresh session request received`);
+        console.log(`${logPrefix} Headers:`, {
+            'user-agent': request.headers.get('user-agent')?.substring(0, 100),
+            'content-type': request.headers.get('content-type'),
+            'x-real-ip': request.headers.get('x-real-ip'),
+            'x-forwarded-for': request.headers.get('x-forwarded-for'),
+        });
+        
         // Get auth status without requiring auth (public route)
+        const authStartTime = Date.now();
+        console.log(`${logPrefix} Calling auth() to get session status...`);
         const authResult = await auth();
+        const authDuration = Date.now() - authStartTime;
+        
         const userId = authResult.userId;
         
         // Check if session exists
@@ -483,15 +495,17 @@ export async function refreshSession(request: NextRequest) {
         // Get sessionId for debugging
         const sessionId = authResult.sessionId || 'no-session';
         
-        console.log(`${logPrefix} Auth result: ${hasValidSession ? 'Authenticated' : 'Not authenticated'}, session: ${hasValidSession ? 'Valid' : 'Invalid'}`);
+        console.log(`${logPrefix} Auth result (took ${authDuration}ms): ${hasValidSession ? 'Authenticated' : 'Not authenticated'}, session: ${hasValidSession ? 'Valid' : 'Invalid'}, userId: ${userId ? userId.substring(0, 8) + '...' : 'none'}`);
         
         // Check Google connection status if authenticated and required by client
         let googleStatus = null;
         
         if (hasValidSession && (request.nextUrl.searchParams.get('checkGoogle') === 'true')) {
             try {
-                console.log(`${logPrefix} Checking Google connection status`);
+                console.log(`${logPrefix} Checking Google connection status for userId: ${userId?.substring(0, 8)}...`);
+                const googleStartTime = Date.now();
                 const connectionStatus = await getOAuthConnectionStatus(userId);
+                const googleDuration = Date.now() - googleStartTime;
                 
                 googleStatus = {
                     connected: connectionStatus.hasToken,
@@ -500,16 +514,25 @@ export async function refreshSession(request: NextRequest) {
                     provider: connectionStatus.provider
                 };
                 
-                console.log(`${logPrefix} Google connection status:`, googleStatus);
+                console.log(`${logPrefix} Google connection status (took ${googleDuration}ms):`, googleStatus);
             } catch (googleError) {
-                console.warn(`${logPrefix} Error checking Google status:`, googleError);
+                const errorMsg = googleError instanceof Error ? googleError.message : String(googleError);
+                console.warn(`${logPrefix} Error checking Google status:`, {
+                    message: errorMsg,
+                    stack: googleError instanceof Error ? googleError.stack?.substring(0, 500) : 'No stack trace'
+                });
+                
                 googleStatus = {
                     connected: false,
                     hasAccount: false,
                     needsReconnect: true,
-                    error: googleError instanceof Error ? googleError.message : String(googleError)
+                    error: errorMsg
                 };
             }
+        } else if (request.nextUrl.searchParams.get('checkGoogle') === 'true') {
+            console.log(`${logPrefix} Google check requested but session is invalid`);
+        } else {
+            console.log(`${logPrefix} No Google check requested`);
         }
         
         // Get session expiry time
@@ -517,40 +540,64 @@ export async function refreshSession(request: NextRequest) {
         let tokenInfo = null;
         
         if (hasValidSession && authResult.sessionClaims) {
+            console.log(`${logPrefix} Session claims available, extracting expiry information`);
+            
             // @ts-ignore - Expiry is in sessionClaims
             const expUtc = authResult.sessionClaims.exp;
             
             if (expUtc) {
                 // Convert to milliseconds and to a Date
                 const expDate = new Date(expUtc * 1000);
+                const timeLeft = Math.floor((expDate.getTime() - Date.now()) / 1000); // seconds left
+                
                 sessionExpiry = {
                     timestamp: expUtc,
                     date: expDate.toISOString(),
-                    timeLeft: Math.floor((expDate.getTime() - Date.now()) / 1000) // seconds left
+                    timeLeft: timeLeft // seconds left
                 };
+                
+                console.log(`${logPrefix} Session expiry: ${timeLeft} seconds remaining (${expDate.toISOString()})`);
+            } else {
+                console.log(`${logPrefix} No expiry found in session claims`);
             }
             
             // Extract token-related information for client validation
             if (authResult.getToken) {
                 try {
+                    console.log(`${logPrefix} Attempting to refresh token...`);
+                    const tokenStartTime = Date.now();
+                    
                     // Get a generic token to trigger refresh
                     await authResult.getToken();
+                    const tokenDuration = Date.now() - tokenStartTime;
+                    
+                    console.log(`${logPrefix} Token refresh successful (took ${tokenDuration}ms)`);
                     
                     tokenInfo = {
                         refreshed: true,
                         timestamp: Date.now()
                     };
                 } catch (tokenError) {
-                    console.warn(`${logPrefix} Error refreshing token:`, tokenError);
+                    const errorMsg = tokenError instanceof Error ? tokenError.message : String(tokenError);
+                    console.warn(`${logPrefix} Error refreshing token:`, {
+                        message: errorMsg,
+                        stack: tokenError instanceof Error ? tokenError.stack?.substring(0, 500) : 'No stack trace'
+                    });
+                    
                     tokenInfo = {
                         refreshed: false,
-                        error: tokenError instanceof Error ? tokenError.message : String(tokenError)
+                        error: errorMsg
                     };
                 }
+            } else {
+                console.log(`${logPrefix} No getToken method available on authResult`);
             }
+        } else if (hasValidSession) {
+            console.log(`${logPrefix} Session valid but no session claims available`);
         }
-                        
-        return NextResponse.json({ 
+        
+        const response = { 
+            success: hasValidSession,
             authenticated: hasValidSession,
             sessionId: hasValidSession ? sessionId : null,
             userId: hasValidSession ? userId : null,
@@ -558,12 +605,32 @@ export async function refreshSession(request: NextRequest) {
             googleStatus,
             tokenInfo,
             timestamp: Date.now()
+        };
+        
+        console.log(`${logPrefix} Returning response with status:`, {
+            success: response.success,
+            authenticated: response.authenticated,
+            hasSessionId: !!response.sessionId,
+            hasUserId: !!response.userId,
+            hasExpiry: !!response.sessionExpiry,
+            hasGoogleStatus: !!response.googleStatus,
+            hasTokenInfo: !!response.tokenInfo
         });
+                        
+        return NextResponse.json(response);
     } catch (error) {
-        console.error('Error in refreshSession:', error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? error.stack : 'No stack trace';
+        
+        console.error('Error in refreshSession:', {
+            message: errorMsg,
+            stack: stack?.substring(0, 500)
+        });
+        
         return NextResponse.json({ 
+            success: false,
             authenticated: false, 
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: errorMsg,
             timestamp: Date.now()
         }, { status: 500 });
     }
