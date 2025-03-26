@@ -1,7 +1,6 @@
 // lib/googleAuth.ts
 import { googleDriveService } from './GoogleDriveService';
 import { getGoogleOAuthToken } from './clerkTokenManager';
-import { getGoogleRefreshToken } from './clerkAuth'; // Keep for backwards compatibility during migration
 import { OAuth2Client } from 'google-auth-library';
 import { google } from 'googleapis';
 

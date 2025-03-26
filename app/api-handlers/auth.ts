@@ -1,7 +1,6 @@
 // app/api-handlers/auth.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { getGoogleRefreshToken, saveGoogleToken } from '@/lib/clerkAuth';
 import { isGoogleConnected } from '@/lib/clerkTokenManager';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 import { getOAuthConnectionStatus } from '@/lib/clerkTokenManager';
@@ -375,109 +374,6 @@ export async function getGoogleAuthUrl(request: NextRequest) {
 }
 
 /**
- * Exchange OAuth code for tokens
- */
-export async function exchangeCode(request: NextRequest) {
-    logWithTimestamp('exchangeCode', 'Handler called');
-    logRequestDetails(request, 'exchangeCode');
-
-    try {
-        const authResult = await auth();
-        const userId = authResult.userId;
-
-        logWithTimestamp('exchangeCode', 'Auth result', { 
-            hasAuth: !!authResult, 
-            userId,
-            sessionId: authResult?.sessionId
-        });
-
-        if (!userId) {
-            logWithTimestamp('exchangeCode', 'No userId found');
-            return NextResponse.json(
-                { error: 'Authentication required' },
-                { status: 401 }
-            );
-        }
-
-        // Parse request body
-        const body = await request.json();
-        const { code, state } = body;
-        logWithTimestamp('exchangeCode', 'Request body received', { codePresent: !!code, statePresent: !!state });
-
-        if (!code) {
-            logWithTimestamp('exchangeCode', 'Missing authorization code');
-            return NextResponse.json(
-                { error: 'Missing authorization code' },
-                { status: 400 }
-            );
-        }
-
-        // Validate state parameter if present
-        if (state) {
-            try {
-                const decodedState = JSON.parse(Buffer.from(state, 'base64').toString());
-                logWithTimestamp('exchangeCode', 'Decoded state', decodedState);
-                
-                // Verify the state contains the correct userId
-                if (decodedState.userId && decodedState.userId !== userId) {
-                    logWithTimestamp('exchangeCode', 'State userId mismatch', { 
-                        stateUserId: decodedState.userId, 
-                        currentUserId: userId 
-                    });
-                    return NextResponse.json(
-                        { error: 'Invalid state parameter' },
-                        { status: 400 }
-                    );
-                }
-            } catch (stateError) {
-                logWithTimestamp('exchangeCode', 'Error decoding state', stateError);
-                // Continue anyway, state validation is a security enhancement but not critical
-            }
-        }
-
-        try {
-            // Exchange code for tokens with Google
-            logWithTimestamp('exchangeCode', 'Exchanging code for tokens');
-            const tokens = await googleDriveService.exchangeCodeForTokens(code);
-            logWithTimestamp('exchangeCode', 'Received tokens', { 
-                hasAccessToken: !!tokens.access_token,
-                hasRefreshToken: !!tokens.refresh_token
-            });
-
-            if (!tokens.refresh_token) {
-                logWithTimestamp('exchangeCode', 'No refresh token received');
-                return NextResponse.json(
-                    { error: 'No refresh token received', details: 'Please revoke app permissions in Google account and try again' },
-                    { status: 400 }
-                );
-            }
-
-            // NOTE: We no longer need to manually save the tokens
-            // Clerk will handle this automatically through the OAuth flow
-            // This is a major change from the previous implementation
-            logWithTimestamp('exchangeCode', 'Clerk handles token storage through OAuth flow');
-            
-            // Clerk automatically stores the token if the user went through the
-            // proper OAuth flow. If they didn't, we need to set a flag for the client
-            // to reconnect using the proper flow instead of manual token storage.
-            return NextResponse.json({ 
-                success: true,
-                message: 'OAuth connection successful'
-            });
-        } catch (tokenError: any) {
-            logWithTimestamp('exchangeCode', 'Error exchanging code', tokenError);
-            throw tokenError;
-        }
-    } catch (error: any) {
-        logWithTimestamp('exchangeCode', 'Handler error', error);
-        return NextResponse.json(
-            { error: `Failed to exchange code: ${error.message || String(error)}` },
-            { status: 500 }
-        );
-    }
-}
-
-/**
  * Disconnect Google Drive
  */
 export async function disconnectGoogle(request: NextRequest) {
@@ -669,55 +565,6 @@ export async function refreshSession(request: NextRequest) {
             authenticated: false, 
             error: error instanceof Error ? error.message : 'Unknown error',
             timestamp: Date.now()
-        }, { status: 500 });
-    }
-}
-
-/**
- * Migrate tokens from the old storage to the Clerk OAuth wallet
- * This endpoint should be called during the authentication process
- * to ensure a smooth transition
- */
-export async function migrateTokens(request: NextRequest): Promise<NextResponse> {
-    logWithTimestamp('migrateTokens', 'Handler called');
-    logRequestDetails(request, 'migrateTokens');
-
-    try {
-        const authResult = await auth();
-        const userId = authResult.userId;
-
-        if (!userId) {
-            return NextResponse.json(
-                { success: false, error: 'Authentication required' },
-                { status: 401 }
-            );
-        }
-
-        // Import the migration function
-        const { migrateGoogleTokenToWallet } = await import('@/lib/clerkTokenManager');
-        
-        // Attempt migration
-        const result = await migrateGoogleTokenToWallet(userId);
-        
-        if (result) {
-            logWithTimestamp('migrateTokens', 'Token migration successful or not needed', { userId });
-            return NextResponse.json({
-                success: true,
-                message: 'Token migration completed successfully'
-            });
-        } else {
-            logWithTimestamp('migrateTokens', 'Token migration failed or not possible', { userId });
-            return NextResponse.json({
-                success: false,
-                message: 'Token migration not possible via API, user needs to reconnect Google',
-                action: 'reconnect'
-            });
-        }
-    } catch (error) {
-        logWithTimestamp('migrateTokens', 'Error during migration', { error });
-        return NextResponse.json({
-            success: false,
-            error: `Migration error: ${error}`
         }, { status: 500 });
     }
 } 

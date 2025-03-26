@@ -129,16 +129,8 @@ const routes: Record<string, RouteHandler> = {
         GET: AuthHandlers.getGoogleAuthUrl,
         requiresAuth: true
     },
-    'auth/exchange-code': {
-        POST: AuthHandlers.exchangeCode,
-        requiresAuth: true
-    },
     'auth/google-disconnect': {
         POST: AuthHandlers.disconnectGoogle,
-        requiresAuth: true
-    },
-    'auth/migrate-tokens': {
-        GET: AuthHandlers.migrateTokens,
         requiresAuth: true
     },
     'auth/session': {

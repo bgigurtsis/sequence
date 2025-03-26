@@ -1,7 +1,6 @@
 // app/api-handlers/upload.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { getGoogleRefreshToken, uploadToGoogleDrive } from '@/lib/clerkAuth';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 
 /**
@@ -30,23 +29,13 @@ export async function upload(request: NextRequest) {
             );
         }
 
-        // Get user's Google refresh token
-        const refreshToken = await getGoogleRefreshToken(userId);
-
-        if (!refreshToken) {
-            return NextResponse.json(
-                { error: 'Google Drive not connected' },
-                { status: 400 }
-            );
-        }
-
         // Process video data (this is a simplified example)
         // In a real implementation, you'd need to decode the video data from base64 or fetch from URL
         const videoBlob = new Blob([]); // Placeholder
 
-        // Upload to Google Drive
+        // Upload to Google Drive - use userId directly instead of refreshToken
         const result = await googleDriveService.uploadFile(
-            refreshToken,
+            userId,
             videoBlob,
             {
                 ...metadata,

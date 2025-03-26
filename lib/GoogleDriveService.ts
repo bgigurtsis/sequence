@@ -1,7 +1,6 @@
 // lib/GoogleDriveService.ts
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
-import { getGoogleRefreshToken } from './clerkAuth';
 
 // Types
 interface FileUploadResult {
@@ -348,23 +347,26 @@ export class GoogleDriveService {
 
     /**
      * List files in a specific folder in Google Drive
-     * @param refreshToken - OAuth refresh token
+     * @param userId - The user's ID (used to get OAuth token)
      * @param folderId - Optional folder ID (uses root folder if not specified)
      * @returns Array of file metadata objects
      */
-    async listFiles(refreshToken: string, folderId?: string): Promise<any[]> {
+    async listFiles(userId: string, folderId?: string): Promise<any[]> {
         try {
             this.logOperation('start', 'Listing files');
 
-            const oauth2Client = this.createOAuth2Client();
-            oauth2Client.setCredentials({ refresh_token: refreshToken });
+            const oauth2Client = await this.getUserAuthClient(userId);
+            
+            if (!oauth2Client) {
+                throw new Error('Failed to get OAuth client for user');
+            }
 
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
             // If no folder specified, get the root folder
             if (!folderId) {
                 this.logOperation('progress', 'No folder ID specified, finding root folder');
-                const rootFolder = await this.findRootFolder(refreshToken);
+                const rootFolder = await this.findRootFolder(userId);
                 folderId = rootFolder?.id;
             }
 
@@ -389,16 +391,19 @@ export class GoogleDriveService {
 
     /**
      * Delete a file from Google Drive
-     * @param refreshToken - OAuth refresh token
+     * @param userId - The user's ID (used to get OAuth token)
      * @param fileId - ID of the file to delete
      * @returns True if deletion was successful
      */
-    async deleteFile(refreshToken: string, fileId: string): Promise<boolean> {
+    async deleteFile(userId: string, fileId: string): Promise<boolean> {
         try {
             this.logOperation('start', `Deleting file with ID: ${fileId}`);
 
-            const oauth2Client = this.createOAuth2Client();
-            oauth2Client.setCredentials({ refresh_token: refreshToken });
+            const oauth2Client = await this.getUserAuthClient(userId);
+            
+            if (!oauth2Client) {
+                throw new Error('Failed to get OAuth client for user');
+            }
 
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
@@ -426,36 +431,6 @@ export class GoogleDriveService {
             this.CLIENT_SECRET,
             this.REDIRECT_URI
         );
-    }
-
-    /**
-     * Get an access token using a refresh token
-     * @param refreshToken - OAuth refresh token
-     * @returns Access token
-     */
-    private async getAccessToken(refreshToken: string): Promise<string> {
-        try {
-            this.logOperation('start', 'Getting access token');
-
-            if (!refreshToken) {
-                throw new Error('No refresh token provided');
-            }
-
-            const oauth2Client = this.createOAuth2Client();
-            oauth2Client.setCredentials({ refresh_token: refreshToken });
-
-            const { token } = await oauth2Client.getAccessToken();
-
-            if (!token) {
-                throw new Error('Failed to get access token');
-            }
-
-            this.logOperation('success', 'Got access token');
-            return token;
-        } catch (error) {
-            this.logOperation('error', `Failed to get access token: ${(error as Error).message}`);
-            throw error;
-        }
     }
 
     /**
@@ -563,13 +538,16 @@ export class GoogleDriveService {
 
     /**
      * Find the root folder for app files
-     * @param refreshToken - OAuth refresh token
+     * @param userId - The user's ID (used to get OAuth token)
      * @returns Folder info (id and name)
      */
-    private async findRootFolder(refreshToken: string): Promise<FolderInfo | null> {
+    private async findRootFolder(userId: string): Promise<FolderInfo | null> {
         try {
-            const oauth2Client = this.createOAuth2Client();
-            oauth2Client.setCredentials({ refresh_token: refreshToken });
+            const oauth2Client = await this.getUserAuthClient(userId);
+            
+            if (!oauth2Client) {
+                throw new Error('Failed to get OAuth client for user');
+            }
 
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 

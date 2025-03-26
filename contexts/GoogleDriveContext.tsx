@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useUser } from '@clerk/nextjs';
+import { useUser, useSignIn } from '@clerk/nextjs';
 
 interface GoogleDriveContextType {
   isConnected: boolean;
@@ -18,7 +18,8 @@ interface GoogleDriveContextType {
 const GoogleDriveContext = createContext<GoogleDriveContextType | undefined>(undefined);
 
 export function GoogleDriveProvider({ children }: { children: React.ReactNode }) {
-  const { isSignedIn, isLoaded } = useUser();
+  const { isSignedIn, isLoaded, user } = useUser();
+  const { signIn, isLoaded: isSignInLoaded } = useSignIn();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -152,130 +153,33 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         return;
       }
 
-      // Start the OAuth flow by getting the authorization URL from your backend
-      const response = await fetch('/api/auth/google-auth-url', {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Failed to get Google auth URL:', errorText);
-        setError('Failed to start Google Drive connection');
+      // Check if signIn is loaded
+      if (!isSignInLoaded || !signIn) {
+        setError('Authentication service not ready');
         setIsLoading(false);
         return;
       }
 
-      const { url } = await response.json();
-
-      // Check that we got a valid URL
-      if (!url) {
-        console.error('No Google auth URL returned from API');
-        setError('Failed to start Google Drive connection');
+      console.log('Starting Google Drive connection using Clerk OAuth...');
+      
+      try {
+        // Use Clerk's sign-in method to authenticate with Google
+        await signIn.authenticateWithRedirect({
+          strategy: 'oauth_google',
+          redirectUrl: `${window.location.origin}/auth/callback`,
+          redirectUrlComplete: window.location.href
+          // Note: Additional scopes like drive.file need to be configured
+          // in the Clerk Dashboard under OAuth settings for Google
+        });
+        
+        // The above will redirect the user to Google's OAuth consent screen
+        // After authentication, they will be redirected back to the callback URL
+      } catch (oauthError) {
+        console.error('Error initiating OAuth connection:', oauthError);
+        const errorMessage = oauthError instanceof Error ? oauthError.message : String(oauthError);
+        setError(`Failed to connect to Google: ${errorMessage}`);
         setIsLoading(false);
-        return;
       }
-
-      // Open Google OAuth consent screen in a popup
-      const popup = window.open(url, 'googleAuth', 'width=600,height=700');
-
-      if (!popup) {
-        setError('Popup blocked. Please allow popups for this site.');
-        setIsLoading(false);
-        return;
-      }
-
-      // Listen for the OAuth callback
-      const messageHandler = async (event: MessageEvent) => {
-        // Only process messages from our expected origin
-        if (event.origin !== window.location.origin) return;
-
-        // Check if this is our OAuth callback message
-        if (event.data && event.data.type === 'GOOGLE_AUTH_CALLBACK') {
-          // Remove the event listener since we've received the message
-          window.removeEventListener('message', messageHandler);
-
-          const { code, error: authError } = event.data;
-
-          if (authError) {
-            setError(`Google authentication failed: ${authError}`);
-            setIsLoading(false);
-            return;
-          }
-
-          if (!code) {
-            setError('No authorization code received from Google');
-            setIsLoading(false);
-            return;
-          }
-
-          try {
-            // Exchange the code for tokens
-            const tokenResponse = await fetch('/api/auth/exchange-code', {
-              method: 'POST',
-              credentials: 'include',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ code })
-            });
-
-            if (!tokenResponse.ok) {
-              const errorData = await tokenResponse.text();
-              console.error('Token exchange failed:', errorData);
-              setError('Failed to complete Google Drive connection');
-              setIsLoading(false);
-              return;
-            }
-
-            const tokenData = await tokenResponse.json();
-
-            // Check if we need to store the token client-side
-            if (tokenData.needsClientStorage && tokenData.token) {
-              // Store the token in localStorage
-              try {
-                const user = await fetch('/api/auth/me', {
-                  method: 'GET',
-                  credentials: 'include',
-                  headers: {
-                    'Content-Type': 'application/json'
-                  }
-                }).then(res => {
-                  if (!res.ok) {
-                    if (res.status === 401) {
-                      console.warn('User not authenticated, cannot initialize Google Drive');
-                      return { authenticated: false };
-                    }
-                    throw new Error(`Error fetching user data: ${res.status}`);
-                  }
-                  return res.json();
-                });
-                if (user && user.id) {
-                  localStorage.setItem(`google_token_${user.id}`, tokenData.token);
-                  console.log('Stored Google token in localStorage due to missing server-side storage');
-                }
-              } catch (localStorageError) {
-                console.error('Failed to store token in localStorage:', localStorageError);
-                // Continue anyway, as the connection might still work
-              }
-            }
-
-            // Connection successful, refresh status
-            await refreshStatus();
-          } catch (error) {
-            console.error('Error connecting Google Drive:', error);
-            setError('Failed to connect Google Drive');
-            setIsLoading(false);
-          }
-        }
-      };
-
-      // Add event listener for the popup callback
-      window.addEventListener('message', messageHandler);
-
     } catch (error) {
       console.error('Error connecting Google Drive:', error);
       setError('Failed to connect Google Drive');
@@ -295,38 +199,32 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
         return;
       }
 
-      console.log('Starting Google Drive reconnection...');
+      // Check if signIn is loaded
+      if (!isSignInLoaded || !signIn) {
+        setError('Authentication service not ready');
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('Starting Google Drive reconnection using Clerk OAuth...');
       
-      // Call the reconnection endpoint instead of the regular auth URL endpoint
-      const response = await fetch('/api/auth/google-reconnect', {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate'
-        }
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Failed to get Google reconnect URL:', errorText);
-        setError('Failed to start Google Drive reconnection');
+      try {
+        // Force a re-authentication with Google
+        await signIn.authenticateWithRedirect({
+          strategy: 'oauth_google',
+          redirectUrl: `${window.location.origin}/auth/callback`,
+          redirectUrlComplete: window.location.href
+          // Note: To force consent screen, configure this in the Clerk Dashboard
+          // or add appropriate parameters in the OAuth settings
+        });
+        
+        // This will redirect the user to Google's consent screen
+      } catch (oauthError) {
+        console.error('Error initiating OAuth reconnection:', oauthError);
+        const errorMessage = oauthError instanceof Error ? oauthError.message : String(oauthError);
+        setError(`Failed to reconnect to Google: ${errorMessage}`);
         setIsLoading(false);
-        return;
       }
-
-      const { url } = await response.json();
-
-      // Check that we got a valid URL
-      if (!url) {
-        console.error('No Google reconnect URL returned from API');
-        setError('Failed to start Google Drive reconnection');
-        setIsLoading(false);
-        return;
-      }
-
-      // Open the Google auth page in the current window
-      window.location.href = url;
     } catch (err) {
       console.error('Error reconnecting to Google Drive:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -340,16 +238,31 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch('/api/auth/google-disconnect', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      if (!isSignedIn || !user) {
+        setError('You must be signed in to disconnect Google Drive');
+        setIsLoading(false);
+        return;
+      }
 
-      if (!response.ok) {
-        throw new Error('Failed to disconnect Google Drive');
+      // Find the Google OAuth account to disconnect
+      const googleAccount = user.externalAccounts?.find(
+        account => account.provider === 'google'
+      );
+
+      if (googleAccount) {
+        try {
+          // Disconnect the account using Clerk's API
+          await googleAccount.destroy();
+          console.log('Google account disconnected successfully');
+        } catch (error) {
+          console.error('Error destroying Google account:', error);
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          setError(`Failed to disconnect: ${errorMessage}`);
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        console.log('No Google account found to disconnect');
       }
 
       await refreshStatus();
