@@ -1,10 +1,22 @@
 import { clerkClient } from '@clerk/nextjs/server';
-import { auth } from '@clerk/nextjs/server';
+import { OAuth2Client } from 'google-auth-library';
+import { google } from 'googleapis';
 
-// Add detailed logging
+// Cache clients by userId to avoid recreating them
+const clientCache: Record<string, { client: OAuth2Client, timestamp: number }> = {};
+
+// How long to cache clients before refreshing (15 minutes)
+const CLIENT_CACHE_TTL = 15 * 60 * 1000;
+
+// Base delay for retry logic
+const RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * Add detailed logging with timestamps
+ */
 function logWithTimestamp(module: string, action: string, message: string, data?: any) {
   const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}][ClerkTokenManager][${module}][${action}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
+  console.log(`[${timestamp}][GoogleOAuthManager][${module}][${action}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
 }
 
 /**
@@ -25,7 +37,6 @@ export async function getGoogleOAuthToken(userId: string): Promise<{ token: stri
       hasData: tokensResponse && typeof tokensResponse === 'object' && 'data' in tokensResponse
     });
     
-    // NEW: Handle different response formats
     // Case 1: Response is already a token array (as a string)
     if (typeof tokensResponse === 'string') {
       try {
@@ -100,7 +111,7 @@ export async function getGoogleOAuthToken(userId: string): Promise<{ token: stri
     logWithTimestamp('OAuth', 'getToken', `Unrecognized token response format for user ${userId}`, {
       responseType: typeof tokensResponse,
       responseKeys: tokensResponse && typeof tokensResponse === 'object' ? Object.keys(tokensResponse) : [],
-      responsePreview: JSON.stringify(tokensResponse).slice(0, 200) // Use slice which is safer
+      responsePreview: JSON.stringify(tokensResponse).slice(0, 200)
     });
     
     return { token: null, provider: 'google' };
@@ -187,90 +198,6 @@ export async function isGoogleConnected(userId: string): Promise<boolean> {
 }
 
 /**
- * Migration function to move tokens from privateMetadata to Clerk's OAuth Token Wallet
- * This is meant to be run once per user during the transition
- * @param userId - The user's ID
- */
-export async function migrateGoogleTokenToWallet(userId: string): Promise<boolean> {
-  try {
-    logWithTimestamp('Migration', 'start', `Migrating Google token for user ${userId}`);
-    
-    // First check if token already exists in wallet
-    const { token: existingToken } = await getGoogleOAuthToken(userId);
-    if (existingToken) {
-      logWithTimestamp('Migration', 'skip', `Token already exists in wallet for user ${userId}`);
-      return true;
-    }
-    
-    // Get user data to check privateMetadata
-    const user = await clerkClient.users.getUser(userId);
-    const privateMetadata = user.privateMetadata as any;
-    
-    // Check if token exists in privateMetadata
-    const refreshToken = privateMetadata?.googleRefreshToken || privateMetadata?.google_refresh_token;
-    
-    if (!refreshToken) {
-      logWithTimestamp('Migration', 'skip', `No token found in privateMetadata for user ${userId}`);
-      return false;
-    }
-    
-    // Token exists in privateMetadata but not in wallet, so we need to migrate
-    // NOTE: Direct token creation in OAuth wallet is not supported by Clerk's API
-    // This is a placeholder for the actual migration logic
-    logWithTimestamp('Migration', 'notice', `Direct token migration not supported by Clerk API, user will need to reconnect Google`, {
-      userId
-    });
-    
-    return false;
-  } catch (error) {
-    logWithTimestamp('Migration', 'ERROR', `Error migrating token for user ${userId}`, error);
-    return false;
-  }
-}
-
-/**
- * Clean up legacy token storage after migration
- * @param userId - The user's ID
- */
-export async function cleanupLegacyTokenStorage(userId: string): Promise<boolean> {
-  try {
-    logWithTimestamp('Cleanup', 'start', `Cleaning up legacy token storage for user ${userId}`);
-    
-    // Get user data
-    const user = await clerkClient.users.getUser(userId);
-    const privateMetadata = { ...(user.privateMetadata as any) };
-    
-    // Check if legacy tokens exist
-    const hasLegacyTokens = !!privateMetadata.googleRefreshToken || 
-                           !!privateMetadata.google_refresh_token;
-    
-    if (!hasLegacyTokens) {
-      logWithTimestamp('Cleanup', 'skip', `No legacy tokens found for user ${userId}`);
-      return true;
-    }
-    
-    // Remove legacy tokens
-    if (privateMetadata.googleRefreshToken) {
-      delete privateMetadata.googleRefreshToken;
-    }
-    if (privateMetadata.google_refresh_token) {
-      delete privateMetadata.google_refresh_token;
-    }
-    
-    // Update user
-    await clerkClient.users.updateUser(userId, {
-      privateMetadata
-    });
-    
-    logWithTimestamp('Cleanup', 'success', `Removed legacy tokens for user ${userId}`);
-    return true;
-  } catch (error) {
-    logWithTimestamp('Cleanup', 'ERROR', `Error cleaning up legacy tokens for user ${userId}`, error);
-    return false;
-  }
-}
-
-/**
  * Get detailed OAuth connection status for a user
  * This performs multiple checks to diagnose connection issues
  * @param userId - The user's ID
@@ -286,23 +213,14 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
   const checkId = Math.random().toString(36).substring(2, 8); // Create unique ID for this check
   
   try {
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Starting OAuth status check for user ${userId.substring(0, 8)}...`);
     logWithTimestamp('OAuth', 'connectionStatus', `Getting detailed OAuth status for user ${userId}`);
     
     // Check if user exists in Clerk
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 1: Getting Clerk user data`);
-    const userStartTime = Date.now();
-    
     let user;
     try {
       user = await clerkClient.users.getUser(userId);
-      console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] User retrieved (took ${Date.now() - userStartTime}ms)`);
     } catch (userError) {
       const errorMsg = userError instanceof Error ? userError.message : String(userError);
-      console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Error getting user from Clerk:`, {
-        error: errorMsg,
-        stack: userError instanceof Error ? userError.stack?.substring(0, 500) : null
-      });
       
       logWithTimestamp('OAuth', 'ERROR', `Error getting user from Clerk: ${userId}`, userError);
       return {
@@ -313,8 +231,6 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
         needsReconnect: true
       };
     }
-    
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 2: Checking for Google OAuth accounts`);
     
     // Multiple ways to check for Google OAuth accounts:
     // 1. Check email addresses with oauth_google verification strategy
@@ -334,14 +250,6 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     // Combine both checks
     const hasGoogleOAuth = hasGoogleOAuthViaEmail || hasGoogleOAuthViaExternalAccounts;
     
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] OAuth account detection:`, {
-      hasGoogleOAuthViaEmail,
-      hasGoogleOAuthViaExternalAccounts,
-      finalResult: hasGoogleOAuth,
-      emailCount: user.emailAddresses?.length || 0,
-      externalAccountCount: user.externalAccounts?.length || 0
-    });
-    
     logWithTimestamp('OAuth', 'connectionStatus', `User ${userId} OAuth detection:`, {
       hasGoogleOAuthViaEmail,
       hasGoogleOAuthViaExternalAccounts,
@@ -349,24 +257,11 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     });
     
     // Check OAuth token in wallet
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Step 3: Checking for Google OAuth token in wallet`);
-    const tokenStartTime = Date.now();
-    
     let tokenResult;
     try {
       tokenResult = await getGoogleOAuthToken(userId);
-      console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Token result received (took ${Date.now() - tokenStartTime}ms)`, {
-        hasToken: !!tokenResult?.token,
-        tokenLength: tokenResult?.token ? `${tokenResult.token.length} chars` : 0,
-        provider: tokenResult?.provider || 'unknown'
-      });
     } catch (tokenError) {
       const errorMessage = tokenError instanceof Error ? tokenError.message : 'Unknown token error';
-      
-      console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Error getting token:`, {
-        error: errorMessage,
-        stack: tokenError instanceof Error ? tokenError.stack?.substring(0, 500) : null
-      });
       
       logWithTimestamp('OAuth', 'ERROR', `Error getting token for user ${userId}`, {
         error: errorMessage,
@@ -384,7 +279,6 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     
     // Ensure we have a valid token result
     if (!tokenResult) {
-      console.warn(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Null token result`);
       logWithTimestamp('OAuth', 'connectionStatus', `Null token result for user ${userId}`);
       return {
         hasToken: false,
@@ -399,27 +293,17 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
     const needsReconnect = hasGoogleOAuth && !tokenResult.token;
     
     if (needsReconnect) {
-      console.warn(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] User has Google OAuth account but no valid token - needs reconnect`);
       logWithTimestamp('OAuth', 'connectionStatus', `User ${userId} needs to reconnect Google OAuth`);
     }
     
-    const finalResult = {
+    return {
       hasToken: !!tokenResult.token,
       hasOAuthAccount: hasGoogleOAuth,
       provider: tokenResult.provider || 'google', // Default to 'google' if provider is missing
       needsReconnect
     };
-    
-    console.log(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] OAuth connection check complete:`, finalResult);
-    
-    return finalResult;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    console.error(`[clerkTokenManager:getOAuthConnectionStatus][${checkId}] Unexpected error:`, {
-      error: errorMessage,
-      stack: error instanceof Error ? error.stack?.substring(0, 500) : null
-    });
     
     logWithTimestamp('OAuth', 'ERROR', `Error checking detailed OAuth status for user ${userId}`, {
       errorMessage,
@@ -433,5 +317,215 @@ export async function getOAuthConnectionStatus(userId: string): Promise<{
       tokenError: errorMessage,
       needsReconnect: true
     };
+  }
+}
+
+/**
+ * Get or refresh a Google OAuth token for a user
+ * @param userId - The user's ID
+ * @returns The access token
+ */
+export async function getOrRefreshGoogleToken(userId: string): Promise<string> {
+  try {
+    logWithTimestamp('OAuth', 'getOrRefresh', `Getting or refreshing OAuth token for user ${userId}`);
+    
+    // Try to get the token
+    const { token } = await getGoogleOAuthToken(userId);
+    
+    if (!token) {
+      // Check if the user has a Google account but no token
+      const status = await getOAuthConnectionStatus(userId);
+      
+      if (status.hasOAuthAccount && !status.hasToken) {
+        throw new Error('Google account exists but no valid token. User needs to reconnect.');
+      } else if (!status.hasOAuthAccount) {
+        throw new Error('No Google account connected.');
+      } else {
+        throw new Error('Failed to retrieve OAuth token.');
+      }
+    }
+    
+    return token;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logWithTimestamp('OAuth', 'ERROR', `Error getting or refreshing token for user ${userId}`, { error: errorMessage });
+    throw error;
+  }
+}
+
+/**
+ * Get a Google Auth client for a specific user
+ * @param userId - The user's ID
+ * @param retryCount - Number of retries attempted (internal use)
+ */
+export async function getUserGoogleAuthClient(userId: string, retryCount = 0): Promise<OAuth2Client> {
+  try {
+    // Maximum number of retries
+    const MAX_RETRIES = 2;
+    
+    // Check if we have a cached client that's still valid
+    const cachedClient = clientCache[userId];
+    if (cachedClient && Date.now() - cachedClient.timestamp < CLIENT_CACHE_TTL) {
+      return cachedClient.client;
+    }
+    
+    // Try to get token from our central getOrRefreshGoogleToken function
+    const accessToken = await getOrRefreshGoogleToken(userId);
+    
+    // Create OAuth2 client with the appropriate credentials
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/google-callback`
+    );
+    
+    // Set credentials using the access token
+    oauth2Client.setCredentials({
+      access_token: accessToken
+    });
+    
+    // Cache the client
+    clientCache[userId] = {
+      client: oauth2Client,
+      timestamp: Date.now()
+    };
+    
+    return oauth2Client;
+  } catch (error) {
+    // Check if we should retry
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isRetryableError = 
+      errorMessage.includes('network') || 
+      errorMessage.includes('timeout') || 
+      errorMessage.includes('ECONNRESET') ||
+      errorMessage.includes('rate limit');
+    
+    if (isRetryableError && retryCount < 2) {
+      logWithTimestamp('OAuth', 'retry', `Retrying token retrieval for user ${userId} (attempt ${retryCount + 1})`);
+      
+      // Exponential backoff: wait longer for each retry
+      const backoffMs = Math.pow(2, retryCount) * RETRY_BASE_DELAY_MS;
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      
+      // Clear cache to force a fresh attempt
+      if (clientCache[userId]) {
+        delete clientCache[userId];
+      }
+      
+      // Retry with incremented count
+      return getUserGoogleAuthClient(userId, retryCount + 1);
+    }
+    
+    logWithTimestamp('OAuth', 'ERROR', `Error creating Google auth client for user ${userId}`, { error: errorMessage });
+    throw new Error(`Google Auth failed: ${errorMessage}`);
+  }
+}
+
+/**
+ * Disconnect Google from a user's account by removing the OAuth token
+ * @param userId - The user's ID
+ */
+export async function disconnectGoogle(userId: string): Promise<void> {
+  try {
+    logWithTimestamp('OAuth', 'disconnect', `Attempting to disconnect Google for user ${userId}`);
+    
+    // Clear cached client if it exists
+    if (clientCache[userId]) {
+      delete clientCache[userId];
+      logWithTimestamp('OAuth', 'disconnect', `Cleared client cache for user ${userId}`);
+    }
+    
+    // Currently, Clerk doesn't provide an API to directly delete tokens
+    // When a user disconnects their Google account through Clerk's UI,
+    // the tokens are automatically deleted
+    
+    logWithTimestamp('OAuth', 'disconnect', `User ${userId} will need to use Clerk's UI to disconnect Google`);
+    
+    // Throw an error with clear instructions
+    throw new Error('To disconnect Google, use the account settings page. Direct token deletion is not supported.');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logWithTimestamp('OAuth', 'ERROR', `Error disconnecting Google for user ${userId}`, { error: errorMessage });
+    throw error;
+  }
+}
+
+/**
+ * Generate a Google OAuth URL for authentication and Drive access
+ * @param sessionId - The current session ID
+ * @param userId - The user's ID
+ * @param reconnect - Whether this is a reconnection flow
+ */
+export function generateAuthUrl(sessionId: string, userId: string, reconnect: boolean = false): string {
+  try {
+    logWithTimestamp('OAuth', 'generateUrl', `Generating OAuth URL for user ${userId}`, { reconnect });
+    
+    // For Clerk's OAuth system, we redirect to their built-in connect account page
+    const baseUrl = '/user/connect-account';
+    const params = new URLSearchParams({
+      provider: 'oauth_google',
+      force: reconnect ? 'true' : 'false',
+    });
+    
+    const authUrl = `${baseUrl}?${params.toString()}`;
+    
+    logWithTimestamp('OAuth', 'generateUrl', `Generated OAuth URL: ${authUrl}`);
+    return authUrl;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logWithTimestamp('OAuth', 'ERROR', `Error generating OAuth URL for user ${userId}`, { error: errorMessage });
+    throw new Error(`Failed to generate Google OAuth URL: ${errorMessage}`);
+  }
+}
+
+/**
+ * Clear the client cache for a user, forcing a new token refresh next time
+ */
+export function clearUserClientCache(userId: string): void {
+  if (clientCache[userId]) {
+    delete clientCache[userId];
+    logWithTimestamp('OAuth', 'clearCache', `Cleared client cache for user ${userId}`);
+  }
+}
+
+/**
+ * Clear all client caches
+ */
+export function clearAllClientCaches(): void {
+  Object.keys(clientCache).forEach(key => {
+    delete clientCache[key];
+  });
+  logWithTimestamp('OAuth', 'clearCache', 'Cleared all client caches');
+}
+
+/**
+ * Get user info from Google
+ * @param accessToken - The access token
+ */
+export async function getUserInfo(accessToken: string) {
+  try {
+    logWithTimestamp('OAuth', 'userInfo', 'Getting user info from Google');
+    
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = `${process.env.NEXT_PUBLIC_BASE_URL}/api/auth/google-callback`;
+
+    if (!clientId || !clientSecret) {
+      throw new Error('Missing Google OAuth credentials in environment variables');
+    }
+
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+    oauth2Client.setCredentials({ access_token: accessToken });
+
+    const oauth2 = google.oauth2({
+      auth: oauth2Client,
+      version: 'v2'
+    });
+
+    return await oauth2.userinfo.get();
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logWithTimestamp('OAuth', 'ERROR', `Error getting user info from Google`, { error: errorMessage });
+    throw error;
   }
 } 

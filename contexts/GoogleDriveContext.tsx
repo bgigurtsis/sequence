@@ -246,7 +246,7 @@ export function GoogleDriveProvider({ children }: { children: React.ReactNode })
 
       // Find the Google OAuth account to disconnect
       const googleAccount = user.externalAccounts?.find(
-        account => account.provider === 'google'
+        account => account.provider && account.provider.includes('google')
       );
 
       if (googleAccount) {

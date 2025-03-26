@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 // import { videoStorage } from './videoStorage'; // (Unused in your snippet)
 import { Performance, Recording, Metadata } from '../types';
-import { getGoogleRefreshToken } from '@/lib/clerkAuth';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 
 // Add timestamp to logs

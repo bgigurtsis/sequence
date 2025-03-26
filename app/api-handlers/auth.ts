@@ -1,18 +1,12 @@
 // app/api-handlers/auth.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { isGoogleConnected } from '@/lib/clerkTokenManager';
+import { isGoogleConnected, getOAuthConnectionStatus } from '@/lib/googleOAuthManager';
 import { googleDriveService } from '@/lib/GoogleDriveService';
-import { getOAuthConnectionStatus } from '@/lib/clerkTokenManager';
-
-// Add detailed logging helper
-function logWithTimestamp(handler: string, message: string, data?: any) {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}][API][auth/${handler}] ${message}`, data ? JSON.stringify(data, null, 2) : '');
-}
+import { log, generateRequestId } from '@/lib/logging';
 
 // Helper function to log request details
-function logRequestDetails(request: NextRequest, handler: string) {
+function logRequestDetails(request: NextRequest, handler: string, requestId: string) {
     try {
         const headers: Record<string, string> = {};
         request.headers.forEach((value, key) => {
@@ -21,7 +15,8 @@ function logRequestDetails(request: NextRequest, handler: string) {
             }
         });
         
-        logWithTimestamp(handler, 'Request details', {
+        log('api', 'info', `[${handler}] Request details`, {
+            requestId,
             method: request.method,
             url: request.url,
             pathname: new URL(request.url).pathname,
@@ -29,7 +24,10 @@ function logRequestDetails(request: NextRequest, handler: string) {
             headers
         });
     } catch (error) {
-        logWithTimestamp(handler, 'Error logging request details', error);
+        log('api', 'error', `[${handler}] Error logging request details`, { 
+            requestId,
+            error: error instanceof Error ? error.message : String(error)
+        });
     }
 }
 
@@ -37,13 +35,15 @@ function logRequestDetails(request: NextRequest, handler: string) {
  * Get current user and Google Drive connection status
  */
 export async function getMe(request: NextRequest): Promise<NextResponse> {
-    logWithTimestamp('AUTH', 'getMe called');
-    logRequestDetails(request, 'getMe');
+    const requestId = generateRequestId('GET', 'auth/me');
+    log('api', 'info', 'getMe called', { requestId });
+    logRequestDetails(request, 'getMe', requestId);
 
     try {
-        logWithTimestamp('AUTH', 'Getting auth result');
+        log('api', 'info', 'Getting auth result', { requestId });
         const authResult = await auth();
-        logWithTimestamp('AUTH', 'Auth result', { 
+        log('api', 'info', 'Auth result', { 
+            requestId,
             hasAuth: !!authResult, 
             userId: authResult?.userId,
             sessionId: authResult?.sessionId
@@ -52,19 +52,19 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
         const userId = authResult.userId;
 
         if (!userId) {
-            logWithTimestamp('AUTH', 'No userId found', { auth: authResult });
+            log('api', 'error', 'No userId found', { requestId, auth: authResult });
             return NextResponse.json(
                 { authenticated: false, error: "Authentication required" },
                 { status: 401, headers: { 'Content-Type': 'application/json' } }
             );
         }
 
-        logWithTimestamp('AUTH', `User authenticated: ${userId}`);
+        log('api', 'info', `User authenticated: ${userId}`, { requestId });
 
         // Check if user has connected Google using Clerk's OAuth wallet
-        logWithTimestamp('AUTH', 'Checking Google connection');
+        log('api', 'info', 'Checking Google connection', { requestId });
         const isConnected = await isGoogleConnected(userId);
-        logWithTimestamp('AUTH', `Google connection status: ${isConnected}`);
+        log('api', 'info', `Google connection status: ${isConnected}`, { requestId });
 
         // Always return the userId regardless of connection status
         const response = NextResponse.json({
@@ -79,10 +79,10 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
         // If user is connected to Google, also check the Drive connection
         if (isConnected) {
             try {
-                logWithTimestamp('AUTH', 'Checking Google Drive connection');
+                log('api', 'info', 'Checking Google Drive connection', { requestId });
                 // This will now use the token from Clerk's wallet
                 const driveConnected = await googleDriveService.checkConnection(userId);
-                logWithTimestamp('AUTH', `Drive connection check result: ${driveConnected}`);
+                log('api', 'info', `Drive connection check result: ${driveConnected}`, { requestId });
 
                 // Update the response with connection status
                 return NextResponse.json({
@@ -92,7 +92,10 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
                     message: driveConnected ? 'Connected to Google Drive' : 'Google Drive connection failed'
                 });
             } catch (driveError: any) {
-                logWithTimestamp('AUTH', 'Error checking Drive connection', driveError);
+                log('api', 'error', 'Error checking Drive connection', { 
+                    requestId,
+                    error: driveError instanceof Error ? driveError.message : String(driveError)
+                });
                 // Still return userId even if Drive connection fails
                 return NextResponse.json({
                     authenticated: true,
@@ -103,14 +106,18 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
             }
         }
 
-        logWithTimestamp('AUTH', 'Sending response', {
+        log('api', 'info', 'Sending response', {
+            requestId,
             status: response.status,
             headers: Object.fromEntries(response.headers.entries())
         });
 
         return response;
     } catch (error) {
-        logWithTimestamp('ERROR', 'Error in getMe', { error });
+        log('api', 'error', 'Error in getMe', { 
+            requestId, 
+            error: error instanceof Error ? error.message : String(error) 
+        });
         return NextResponse.json(
             { authenticated: false, error: `Error checking authentication: ${error}` },
             { status: 500, headers: { 'Content-Type': 'application/json' } }
@@ -122,15 +129,17 @@ export async function getMe(request: NextRequest): Promise<NextResponse> {
  * Check Google Drive connection status
  */
 export async function getGoogleStatus(request: NextRequest) {
-    logWithTimestamp('getGoogleStatus', 'Handler called');
-    logRequestDetails(request, 'getGoogleStatus');
+    const requestId = generateRequestId('GET', 'auth/google-status');
+    log('api', 'info', 'getGoogleStatus called', { requestId });
+    logRequestDetails(request, 'getGoogleStatus', requestId);
 
     try {
         const authResult = await auth();
         const userId = authResult.userId;
         const sessionId = authResult.sessionId;
 
-        logWithTimestamp('getGoogleStatus', 'Auth result', { 
+        log('api', 'info', 'Auth result', { 
+            requestId,
             hasAuth: !!authResult, 
             userId,
             sessionId,
@@ -139,7 +148,7 @@ export async function getGoogleStatus(request: NextRequest) {
 
         // First check for session validity
         if (!sessionId) {
-            logWithTimestamp('getGoogleStatus', 'No session found');
+            log('api', 'info', 'No session found', { requestId });
             return NextResponse.json(
                 { 
                     connected: false, 
@@ -159,7 +168,7 @@ export async function getGoogleStatus(request: NextRequest) {
         }
 
         if (!userId) {
-            logWithTimestamp('getGoogleStatus', 'Session exists but user not authenticated');
+            log('api', 'info', 'Session exists but user not authenticated', { requestId });
             return NextResponse.json(
                 { 
                     connected: false, 
@@ -181,18 +190,19 @@ export async function getGoogleStatus(request: NextRequest) {
         }
 
         // User is authenticated, now check Google connection
-        logWithTimestamp('getGoogleStatus', 'Checking Google connection for userId', { userId });
+        log('api', 'info', 'Checking Google connection for userId', { requestId, userId });
         
         try {
             // Get detailed connection information using the enhanced function
-            const { getOAuthConnectionStatus } = await import('@/lib/clerkTokenManager');
+            const { getOAuthConnectionStatus } = await import('@/lib/googleOAuthManager');
             
             // Catch any errors that might occur during the connection status check
             let connectionStatus;
             try {
                 connectionStatus = await getOAuthConnectionStatus(userId);
             } catch (statusError) {
-                logWithTimestamp('getGoogleStatus', 'Error retrieving OAuth connection status', {
+                log('api', 'error', 'Error retrieving OAuth connection status', {
+                    requestId,
                     error: statusError instanceof Error ? statusError.message : String(statusError),
                     stack: statusError instanceof Error ? statusError.stack : null
                 });
@@ -209,7 +219,7 @@ export async function getGoogleStatus(request: NextRequest) {
                 });
             }
             
-            logWithTimestamp('getGoogleStatus', `Google OAuth status`, connectionStatus);
+            log('api', 'info', 'Google OAuth status', { requestId, connectionStatus });
 
             // If user has no token or needs to reconnect, return appropriate status
             if (!connectionStatus.hasToken) {
@@ -232,11 +242,11 @@ export async function getGoogleStatus(request: NextRequest) {
 
             // If we have a token, verify the Google Drive connection by making a test API call
             try {
-                logWithTimestamp('getGoogleStatus', 'Verifying Google API access');
+                log('api', 'info', 'Verifying Google API access', { requestId });
                 // This will use the token from Clerk's wallet
                 const driveConnected = await googleDriveService.checkConnection(userId);
                 
-                logWithTimestamp('getGoogleStatus', `Google API access result: ${driveConnected}`);
+                log('api', 'info', 'Google API access result', { requestId, driveConnected });
                 
                 return NextResponse.json({
                     connected: driveConnected,
@@ -249,7 +259,8 @@ export async function getGoogleStatus(request: NextRequest) {
                     code: driveConnected ? 'GOOGLE_CONNECTED' : 'GOOGLE_CONNECTION_FAILED'
                 });
             } catch (driveError) {
-                logWithTimestamp('getGoogleStatus', 'Error checking Google Drive connection', {
+                log('api', 'error', 'Error checking Google Drive connection', {
+                    requestId,
                     error: driveError instanceof Error ? driveError.message : String(driveError),
                     stack: driveError instanceof Error ? driveError.stack : null
                 });
@@ -285,7 +296,10 @@ export async function getGoogleStatus(request: NextRequest) {
                 stack: tokenError instanceof Error ? tokenError.stack : null
             };
             
-            logWithTimestamp('getGoogleStatus', 'Error retrieving token information', errorDetails);
+            log('api', 'error', 'Error retrieving token information', {
+                requestId,
+                errorDetails: errorDetails instanceof Error ? errorDetails.message : String(errorDetails)
+            });
             
             return NextResponse.json({
                 connected: false,
@@ -308,7 +322,10 @@ export async function getGoogleStatus(request: NextRequest) {
             stack: error instanceof Error ? error.stack : null
         };
         
-        logWithTimestamp('getGoogleStatus', 'Error in handler', errorInfo);
+        log('api', 'error', 'Error in handler', {
+            requestId,
+            errorInfo: errorInfo instanceof Error ? errorInfo.message : String(errorInfo)
+        });
         
         return NextResponse.json({
             connected: false,
@@ -326,21 +343,23 @@ export async function getGoogleStatus(request: NextRequest) {
  * Generate a Google auth URL for OAuth flow
  */
 export async function getGoogleAuthUrl(request: NextRequest) {
-    logWithTimestamp('getGoogleAuthUrl', 'Handler called');
-    logRequestDetails(request, 'getGoogleAuthUrl');
+    const requestId = generateRequestId('GET', 'auth/google-auth-url');
+    log('api', 'info', 'getGoogleAuthUrl called', { requestId });
+    logRequestDetails(request, 'getGoogleAuthUrl', requestId);
 
     try {
         const authResult = await auth();
         const userId = authResult.userId;
 
-        logWithTimestamp('getGoogleAuthUrl', 'Auth result', { 
+        log('api', 'info', 'Auth result', { 
+            requestId,
             hasAuth: !!authResult, 
             userId,
             sessionId: authResult?.sessionId
         });
 
         if (!userId) {
-            logWithTimestamp('getGoogleAuthUrl', 'No userId found');
+            log('api', 'error', 'No userId found', { requestId });
             return NextResponse.json(
                 { error: 'Authentication required' },
                 { status: 401 }
@@ -350,22 +369,22 @@ export async function getGoogleAuthUrl(request: NextRequest) {
         // Generate a state parameter to prevent CSRF attacks
         // Include the userId so we know who to associate the tokens with
         const state = Buffer.from(JSON.stringify({ userId, timestamp: Date.now() })).toString('base64');
-        logWithTimestamp('getGoogleAuthUrl', 'Generated state parameter', { userId, state });
+        log('api', 'info', 'Generated state parameter', { requestId, userId, state });
 
         // Use the service to generate the auth URL
         try {
             const authUrl = googleDriveService.generateAuthUrl();
             // Add state parameter to the URL
             const urlWithState = `${authUrl}&state=${encodeURIComponent(state)}`;
-            logWithTimestamp('getGoogleAuthUrl', 'Generated auth URL', { urlWithState });
+            log('api', 'info', 'Generated auth URL', { requestId, urlWithState });
 
             return NextResponse.json({ url: urlWithState });
         } catch (urlError) {
-            logWithTimestamp('getGoogleAuthUrl', 'Error generating URL', urlError);
+            log('api', 'error', 'Error generating URL', { requestId, error: urlError instanceof Error ? urlError.message : String(urlError) });
             throw urlError;
         }
     } catch (error: any) {
-        logWithTimestamp('getGoogleAuthUrl', 'Handler error', error);
+        log('api', 'error', 'Handler error', { requestId, error: error instanceof Error ? error.message : String(error) });
         return NextResponse.json(
             { error: `Failed to generate auth URL: ${error.message || String(error)}` }, 
             { status: 500 }
@@ -377,7 +396,8 @@ export async function getGoogleAuthUrl(request: NextRequest) {
  * Disconnect Google Drive
  */
 export async function disconnectGoogle(request: NextRequest) {
-    logWithTimestamp('disconnectGoogle', 'Handler called', { url: request.url });
+    const requestId = generateRequestId('POST', 'auth/disconnect-google');
+    log('api', 'info', 'disconnectGoogle called', { requestId, url: request.url });
 
     const authResult = await auth();
     const userId = authResult.userId;
@@ -405,7 +425,8 @@ export async function disconnectGoogle(request: NextRequest) {
  * Create a session
  */
 export async function createSession(request: NextRequest) {
-    logWithTimestamp('createSession', 'Handler called', { url: request.url });
+    const requestId = generateRequestId('POST', 'auth/create-session');
+    log('api', 'info', 'createSession called', { requestId, url: request.url });
 
     try {
         // Session creation logic would go here
@@ -422,7 +443,8 @@ export async function createSession(request: NextRequest) {
  * Get user details
  */
 export async function getUser(request: NextRequest) {
-    logWithTimestamp('getUser', 'Handler called', { url: request.url });
+    const requestId = generateRequestId('GET', 'auth/user');
+    log('api', 'info', 'getUser called', { requestId, url: request.url });
 
     const authResult = await auth();
     const userId = authResult.userId;
@@ -450,7 +472,8 @@ export async function getUser(request: NextRequest) {
  * Logout user
  */
 export async function logout(request: NextRequest) {
-    logWithTimestamp('logout', 'Handler called', { url: request.url });
+    const requestId = generateRequestId('POST', 'auth/logout');
+    log('api', 'info', 'logout called', { requestId, url: request.url });
 
     try {
         // Logout logic would go here
@@ -467,23 +490,17 @@ export async function logout(request: NextRequest) {
  * Refresh user's session
  */
 export async function refreshSession(request: NextRequest) {
+    const requestId = generateRequestId('GET', 'auth/refresh-session');
+    log('api', 'info', 'refreshSession called', { 
+        requestId,
+        userAgent: request.headers.get('user-agent')?.substring(0, 100),
+        ip: request.headers.get('x-real-ip') || request.headers.get('x-forwarded-for')
+    });
+    
     try {
-        // Enhanced logging with timestamp
-        const timestamp = new Date().toISOString();
-        const requestId = request.headers.get('x-request-id') || `refresh-${Date.now().toString(36).substring(2, 10)}`;
-        const logPrefix = `[${timestamp}][AuthAPI][refreshSession][${requestId}]`;
-        
-        console.log(`${logPrefix} Refresh session request received`);
-        console.log(`${logPrefix} Headers:`, {
-            'user-agent': request.headers.get('user-agent')?.substring(0, 100),
-            'content-type': request.headers.get('content-type'),
-            'x-real-ip': request.headers.get('x-real-ip'),
-            'x-forwarded-for': request.headers.get('x-forwarded-for'),
-        });
-        
         // Get auth status without requiring auth (public route)
         const authStartTime = Date.now();
-        console.log(`${logPrefix} Calling auth() to get session status...`);
+        log('api', 'info', 'Getting session status', { requestId });
         const authResult = await auth();
         const authDuration = Date.now() - authStartTime;
         
@@ -495,14 +512,20 @@ export async function refreshSession(request: NextRequest) {
         // Get sessionId for debugging
         const sessionId = authResult.sessionId || 'no-session';
         
-        console.log(`${logPrefix} Auth result (took ${authDuration}ms): ${hasValidSession ? 'Authenticated' : 'Not authenticated'}, session: ${hasValidSession ? 'Valid' : 'Invalid'}, userId: ${userId ? userId.substring(0, 8) + '...' : 'none'}`);
+        log('api', 'info', 'Auth result', { 
+            requestId, 
+            authenticated: hasValidSession, 
+            sessionValid: hasValidSession, 
+            userId: userId ? `${userId.substring(0, 8)}...` : 'none',
+            duration: `${authDuration}ms`
+        });
         
         // Check Google connection status if authenticated and required by client
         let googleStatus = null;
         
         if (hasValidSession && (request.nextUrl.searchParams.get('checkGoogle') === 'true')) {
             try {
-                console.log(`${logPrefix} Checking Google connection status for userId: ${userId?.substring(0, 8)}...`);
+                log('api', 'info', 'Checking Google connection status', { requestId, userId });
                 const googleStartTime = Date.now();
                 const connectionStatus = await getOAuthConnectionStatus(userId);
                 const googleDuration = Date.now() - googleStartTime;
@@ -514,11 +537,16 @@ export async function refreshSession(request: NextRequest) {
                     provider: connectionStatus.provider
                 };
                 
-                console.log(`${logPrefix} Google connection status (took ${googleDuration}ms):`, googleStatus);
+                log('api', 'info', 'Google connection status', { 
+                    requestId, 
+                    duration: `${googleDuration}ms`,
+                    ...googleStatus
+                });
             } catch (googleError) {
                 const errorMsg = googleError instanceof Error ? googleError.message : String(googleError);
-                console.warn(`${logPrefix} Error checking Google status:`, {
-                    message: errorMsg,
+                log('api', 'warn', 'Error checking Google status', {
+                    requestId,
+                    error: errorMsg,
                     stack: googleError instanceof Error ? googleError.stack?.substring(0, 500) : 'No stack trace'
                 });
                 
@@ -530,9 +558,9 @@ export async function refreshSession(request: NextRequest) {
                 };
             }
         } else if (request.nextUrl.searchParams.get('checkGoogle') === 'true') {
-            console.log(`${logPrefix} Google check requested but session is invalid`);
+            log('api', 'info', 'Google check requested but session is invalid', { requestId });
         } else {
-            console.log(`${logPrefix} No Google check requested`);
+            log('api', 'info', 'No Google check requested', { requestId });
         }
         
         // Get session expiry time
@@ -540,7 +568,7 @@ export async function refreshSession(request: NextRequest) {
         let tokenInfo = null;
         
         if (hasValidSession && authResult.sessionClaims) {
-            console.log(`${logPrefix} Session claims available, extracting expiry information`);
+            log('api', 'info', 'Extracting session expiry information', { requestId });
             
             // @ts-ignore - Expiry is in sessionClaims
             const expUtc = authResult.sessionClaims.exp;
@@ -556,22 +584,29 @@ export async function refreshSession(request: NextRequest) {
                     timeLeft: timeLeft // seconds left
                 };
                 
-                console.log(`${logPrefix} Session expiry: ${timeLeft} seconds remaining (${expDate.toISOString()})`);
+                log('api', 'info', 'Session expiry', { 
+                    requestId, 
+                    secondsRemaining: timeLeft,
+                    expiry: expDate.toISOString()
+                });
             } else {
-                console.log(`${logPrefix} No expiry found in session claims`);
+                log('api', 'info', 'No expiry found in session claims', { requestId });
             }
             
             // Extract token-related information for client validation
             if (authResult.getToken) {
                 try {
-                    console.log(`${logPrefix} Attempting to refresh token...`);
+                    log('api', 'info', 'Attempting to refresh token', { requestId });
                     const tokenStartTime = Date.now();
                     
                     // Get a generic token to trigger refresh
                     await authResult.getToken();
                     const tokenDuration = Date.now() - tokenStartTime;
                     
-                    console.log(`${logPrefix} Token refresh successful (took ${tokenDuration}ms)`);
+                    log('api', 'info', 'Token refresh successful', { 
+                        requestId,
+                        duration: `${tokenDuration}ms`
+                    });
                     
                     tokenInfo = {
                         refreshed: true,
@@ -579,8 +614,9 @@ export async function refreshSession(request: NextRequest) {
                     };
                 } catch (tokenError) {
                     const errorMsg = tokenError instanceof Error ? tokenError.message : String(tokenError);
-                    console.warn(`${logPrefix} Error refreshing token:`, {
-                        message: errorMsg,
+                    log('api', 'warn', 'Error refreshing token', {
+                        requestId,
+                        error: errorMsg,
                         stack: tokenError instanceof Error ? tokenError.stack?.substring(0, 500) : 'No stack trace'
                     });
                     
@@ -590,10 +626,10 @@ export async function refreshSession(request: NextRequest) {
                     };
                 }
             } else {
-                console.log(`${logPrefix} No getToken method available on authResult`);
+                log('api', 'info', 'No getToken method available', { requestId });
             }
         } else if (hasValidSession) {
-            console.log(`${logPrefix} Session valid but no session claims available`);
+            log('api', 'info', 'Session valid but no session claims available', { requestId });
         }
         
         const response = { 
@@ -607,7 +643,8 @@ export async function refreshSession(request: NextRequest) {
             timestamp: Date.now()
         };
         
-        console.log(`${logPrefix} Returning response with status:`, {
+        log('api', 'info', 'Returning response', {
+            requestId,
             success: response.success,
             authenticated: response.authenticated,
             hasSessionId: !!response.sessionId,
@@ -622,8 +659,9 @@ export async function refreshSession(request: NextRequest) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         const stack = error instanceof Error ? error.stack : 'No stack trace';
         
-        console.error('Error in refreshSession:', {
-            message: errorMsg,
+        log('api', 'error', 'Error in refreshSession', {
+            requestId,
+            error: errorMsg,
             stack: stack?.substring(0, 500)
         });
         
@@ -634,4 +672,4 @@ export async function refreshSession(request: NextRequest) {
             timestamp: Date.now()
         }, { status: 500 });
     }
-} 
+}

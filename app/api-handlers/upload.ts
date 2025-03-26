@@ -1,39 +1,49 @@
 // app/api-handlers/upload.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
 import { googleDriveService } from '@/lib/GoogleDriveService';
+import { log, generateRequestId } from '@/lib/logging';
+import { requireAuth, tryRefreshSession } from '@/lib/server/auth';
 
 /**
  * Handle generic upload requests
  */
 export async function upload(request: NextRequest) {
-    const authResult = await auth();
-    const userId = authResult.userId;
-
-    if (!userId) {
-        return NextResponse.json(
-            { error: 'Authentication required' },
-            { status: 401 }
-        );
-    }
-
+    const requestId = generateRequestId('POST', 'upload');
+    log('upload', 'info', 'Processing upload request', { requestId });
+    
     try {
+        // Use requireAuth which will throw a 401 response if not authenticated
+        const userId = await requireAuth(requestId);
+        
+        // Ensure session token is fresh
+        await tryRefreshSession(requestId);
+        
+        log('upload', 'info', 'User authenticated', { requestId, userId });
+        
         // Parse request body
         const body = await request.json();
         const { videoData, metadata } = body;
 
         if (!videoData) {
+            log('upload', 'error', 'Missing video data', { requestId });
             return NextResponse.json(
                 { error: 'Missing video data' },
                 { status: 400 }
             );
         }
 
+        log('upload', 'info', 'Processing video data', { 
+            requestId,
+            hasMetadata: !!metadata,
+            metadataKeys: metadata ? Object.keys(metadata) : []
+        });
+        
         // Process video data (this is a simplified example)
         // In a real implementation, you'd need to decode the video data from base64 or fetch from URL
         const videoBlob = new Blob([]); // Placeholder
 
-        // Upload to Google Drive - use userId directly instead of refreshToken
+        // Upload to Google Drive using userId directly
+        log('upload', 'info', 'Uploading to Google Drive', { requestId });
         const result = await googleDriveService.uploadFile(
             userId,
             videoBlob,
@@ -43,12 +53,24 @@ export async function upload(request: NextRequest) {
             }
         );
 
+        log('upload', 'info', 'Upload completed successfully', {
+            requestId,
+            fileId: result.fileId,
+            fileName: result.fileName
+        });
+        
         return NextResponse.json({
             success: true,
             fileId: result.fileId,
             fileName: result.fileName
         });
     } catch (error: any) {
+        // Don't need to handle errors here, they will be caught by the API route wrapper
+        log('upload', 'error', 'Upload failed', {
+            requestId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined
+        });
         throw error;
     }
 }
@@ -57,70 +79,17 @@ export async function upload(request: NextRequest) {
  * Handle form-based uploads with multipart/form-data
  */
 export async function uploadForm(request: NextRequest) {
+    const requestId = generateRequestId('POST', 'upload/form');
+    log('upload', 'info', 'Processing form upload request', { requestId });
+    
     try {
-        // Enhanced logging with timestamp
-        const timestamp = new Date().toISOString();
-        const logPrefix = `[${timestamp}][Upload]`;
+        // Use requireAuth which will throw a 401 response if not authenticated
+        const userId = await requireAuth(requestId);
         
-        console.log(`${logPrefix} Processing form upload request`);
+        // Ensure session token is fresh
+        await tryRefreshSession(requestId);
         
-        // First validate authentication
-        const authResult = await auth();
-        const userId = authResult.userId;
-        const sessionId = authResult.sessionId;
-
-        // Handle authentication issues more gracefully
-        if (!sessionId) {
-            console.log(`${logPrefix} No session found, authentication required`);
-            return NextResponse.json(
-                { 
-                    error: 'Authentication required',
-                    code: 'NO_SESSION',
-                    message: 'Your session was not found. Please sign in again.'
-                },
-                { status: 401 }
-            );
-        }
-
-        if (!userId) {
-            console.log(`${logPrefix} Session exists (${sessionId}) but no userId, expired session`);
-            return NextResponse.json(
-                { 
-                    error: 'Session expired',
-                    code: 'SESSION_EXPIRED',
-                    message: 'Your session has expired. Please refresh and try again.'
-                },
-                { 
-                    status: 401,
-                    headers: {
-                        'X-Session-Status': 'expired',
-                        'X-Session-Id': sessionId,
-                        'X-Refresh-Required': 'true'
-                    }
-                }
-            );
-        }
-
-        console.log(`${logPrefix} User authenticated: ${userId}`);
-        
-        // Manually refresh session to ensure it won't expire during upload
-        try {
-            console.log(`${logPrefix} Refreshing session before upload for user: ${userId}`);
-            
-            // Use the getToken function from auth to trigger a session refresh
-            const { getToken } = authResult;
-            
-            if (getToken) {
-                // Retrieving a token refreshes the session
-                await getToken();
-                console.log(`${logPrefix} Session refreshed before upload`);
-            } else {
-                console.log(`${logPrefix} getToken function not available, skipping refresh`);
-            }
-        } catch (refreshError) {
-            console.warn(`${logPrefix} Session refresh warning:`, refreshError);
-            // Continue with upload even if refresh fails - we'll handle auth errors later
-        }
+        log('upload', 'info', 'User authenticated for form upload', { requestId, userId });
 
         // Get form data
         const formData = await request.formData();
@@ -130,6 +99,14 @@ export async function uploadForm(request: NextRequest) {
         const videoBlob = formData.get('video') as Blob;
         const thumbnailBlob = formData.get('thumbnail') as Blob | null;
         
+        log('upload', 'info', 'Form data received', {
+            requestId,
+            hasVideo: !!videoBlob,
+            hasThumbnail: !!thumbnailBlob,
+            recordingId,
+            performanceId
+        });
+        
         // Get metadata from form data - handle both string and direct properties
         let metadata: Record<string, any> = {};
         const metadataString = formData.get('metadataString') as string;
@@ -137,8 +114,16 @@ export async function uploadForm(request: NextRequest) {
         if (metadataString) {
             try {
                 metadata = JSON.parse(metadataString);
+                log('upload', 'info', 'Parsed metadata from JSON string', {
+                    requestId,
+                    metadataKeys: Object.keys(metadata)
+                });
             } catch (error) {
-                console.error(`${logPrefix} Failed to parse metadata JSON:`, error);
+                log('upload', 'error', 'Failed to parse metadata JSON', {
+                    requestId,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+                
                 return NextResponse.json(
                     { 
                         error: 'Invalid metadata format',
@@ -157,11 +142,16 @@ export async function uploadForm(request: NextRequest) {
                     metadata[field] = value;
                 }
             });
+            
+            log('upload', 'info', 'Collected metadata from individual fields', {
+                requestId,
+                metadataKeys: Object.keys(metadata)
+            });
         }
 
         // Validate required fields
         if (!videoBlob) {
-            console.error(`${logPrefix} Missing video blob in upload request`);
+            log('upload', 'error', 'Missing video blob in upload request', { requestId });
             return NextResponse.json(
                 { 
                     error: 'Missing video data',
@@ -173,7 +163,7 @@ export async function uploadForm(request: NextRequest) {
         }
         
         if (!performanceId) {
-            console.error(`${logPrefix} Missing performanceId in upload request`);
+            log('upload', 'error', 'Missing performanceId in upload request', { requestId });
             return NextResponse.json(
                 { 
                     error: 'Missing performance ID',
@@ -184,33 +174,12 @@ export async function uploadForm(request: NextRequest) {
             );
         }
 
-        // Get Google token with enhanced error handling
         try {
-            console.log(`${logPrefix} Retrieving Google OAuth token for user: ${userId}`);
-            
-            // Import the token manager here to avoid circular dependencies
-            const { getGoogleOAuthToken } = await import('@/lib/clerkTokenManager');
-            
-            // Call the token manager with proper parameters
-            const tokenResult = await getGoogleOAuthToken(userId);
-            const accessToken = tokenResult.token;
-            
-            // Log additional context for debugging but don't pass to function
-            console.log(`${logPrefix} Token retrieval context: upload_form, operation: video_upload`);
-            
-            if (!accessToken) {
-                console.error(`${logPrefix} No Google token available for user: ${userId}`);
-                return NextResponse.json(
-                    { 
-                        error: 'Google Drive not connected',
-                        code: 'NO_GOOGLE_CONNECTION',
-                        message: 'Your Google Drive account is not connected. Please connect your Google account in settings.'
-                    },
-                    { status: 400 }
-                );
-            }
-
-            console.log(`${logPrefix} Successfully obtained token, proceeding with upload`);
+            log('upload', 'info', 'Starting Google Drive upload', {
+                requestId,
+                recordingId: recordingId || 'new',
+                performanceId
+            });
             
             // Create complete metadata for the upload
             const completeMetadata = {
@@ -222,16 +191,21 @@ export async function uploadForm(request: NextRequest) {
                 uploadTime: new Date().toISOString()
             };
 
-            // Upload to Google Drive using the token from Clerk's wallet
-            console.log(`${logPrefix} Starting Google Drive upload for recording: ${completeMetadata.recordingId}`);
+            // Upload to Google Drive using the userId
             const result = await googleDriveService.uploadFile(
-                userId, // Now we pass userId instead of token directly
+                userId,
                 videoBlob,
                 completeMetadata,
                 thumbnailBlob || undefined
             );
 
-            console.log(`${logPrefix} Upload successful: ${result.fileId}`);
+            log('upload', 'info', 'Upload successful', {
+                requestId,
+                fileId: result.fileId,
+                fileName: result.fileName,
+                thumbnailId: result.thumbnailId
+            });
+            
             return NextResponse.json({
                 success: true,
                 fileId: result.fileId,
@@ -240,7 +214,11 @@ export async function uploadForm(request: NextRequest) {
                 webViewLink: result.webViewLink
             });
         } catch (uploadError: any) {
-            console.error(`${logPrefix} Error during upload:`, uploadError);
+            log('upload', 'error', 'Error during upload', {
+                requestId,
+                error: uploadError instanceof Error ? uploadError.message : String(uploadError),
+                stack: uploadError instanceof Error ? uploadError.stack : undefined
+            });
             
             // Detailed error handling based on different error types
             if (uploadError.message?.includes('token')) {
@@ -296,7 +274,12 @@ export async function uploadForm(request: NextRequest) {
             );
         }
     } catch (error: any) {
-        console.error(`[${new Date().toISOString()}][Upload] Unexpected error:`, error);
+        log('upload', 'error', 'Unexpected error in form upload', {
+            requestId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined
+        });
+        
         return NextResponse.json(
             { 
                 error: 'Upload failed',

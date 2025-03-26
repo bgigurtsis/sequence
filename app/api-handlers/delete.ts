@@ -1,15 +1,20 @@
 // app/api-handlers/delete.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
 import { google } from 'googleapis';
-import { getUserGoogleAuthClient } from '@/lib/googleAuth';
+import { getUserGoogleAuthClient } from '@/lib/googleOAuthManager';
 import { googleDriveService } from '@/lib/GoogleDriveService';
+import { log, generateRequestId } from '@/lib/logging';
+import { requireAuth } from '@/lib/server/auth';
 
 /**
  * Helper to find a folder in Google Drive
  */
-async function findFolder(drive: any, name: string, parentId?: string): Promise<string | null> {
-    console.log(`Looking for folder: "${name}"${parentId ? ` in parent ${parentId}` : ''}`);
+async function findFolder(drive: any, name: string, parentId?: string, requestId?: string): Promise<string | null> {
+    log('delete', 'info', `Looking for folder`, { 
+        requestId,
+        folderName: name,
+        parentId: parentId || 'root'
+    });
 
     try {
         const query = parentId
@@ -23,14 +28,26 @@ async function findFolder(drive: any, name: string, parentId?: string): Promise<
         });
 
         if (res.data.files && res.data.files.length > 0) {
-            console.log(`Found folder: "${name}" with ID: ${res.data.files[0].id}`);
+            log('delete', 'info', `Found folder`, { 
+                requestId,
+                folderName: name,
+                folderId: res.data.files[0].id
+            });
             return res.data.files[0].id;
         }
 
-        console.log(`Folder not found: "${name}"`);
+        log('delete', 'info', `Folder not found`, { 
+            requestId,
+            folderName: name
+        });
         return null;
     } catch (error) {
-        console.error(`Error looking for folder: "${name}"`, error);
+        log('delete', 'error', `Error looking for folder`, { 
+            requestId,
+            folderName: name,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined
+        });
         throw error;
     }
 }
@@ -39,35 +56,34 @@ async function findFolder(drive: any, name: string, parentId?: string): Promise<
  * Handle delete requests
  */
 export async function deleteItem(request: NextRequest) {
-    console.log('Delete API called');
+    const requestId = generateRequestId('DELETE', 'delete');
+    log('delete', 'info', 'Delete API called', { requestId });
 
     try {
-        // Get the current user
-        const authResult = await auth();
-        const userId = authResult.userId;
-
-        if (!userId) {
-            return NextResponse.json({
-                error: 'Authentication required',
-                details: 'You must be logged in to delete files'
-            }, { status: 401 });
-        }
+        // Use requireAuth which will throw a 401 response if not authenticated
+        const userId = await requireAuth(requestId);
+        
+        log('delete', 'info', 'User authenticated', { requestId, userId });
 
         // Get request data
         const data = await request.json();
-        console.log('Delete request data:', data);
+        log('delete', 'info', 'Delete request data', { 
+            requestId,
+            ...data,
+            type: data.type
+        });
 
         const { type, performanceId, performanceTitle, rehearsalId, rehearsalTitle, recordingId, recordingTitle } = data;
 
         // Initialize Google Drive API with user credentials
-        console.log(`Initializing Google Drive API for user: ${userId}`);
+        log('delete', 'info', 'Initializing Google Drive API', { requestId, userId });
         const oauth2Client = await getUserGoogleAuthClient(userId);
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
         // Find root folder - using StageVault Recordings
-        const rootFolderId = await findFolder(drive, "StageVault Recordings");
+        const rootFolderId = await findFolder(drive, "StageVault Recordings", undefined, requestId);
         if (!rootFolderId) {
-            console.log('Root folder not found, nothing to delete');
+            log('delete', 'info', 'Root folder not found, nothing to delete', { requestId });
             return NextResponse.json({ success: true, message: 'No files found to delete' });
         }
 
@@ -75,73 +91,100 @@ export async function deleteItem(request: NextRequest) {
         switch (type) {
             case 'performance': {
                 // Find and delete performance folder
-                console.log(`Looking for performance folder: "${performanceTitle}"`);
-                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId);
+                log('delete', 'info', 'Looking for performance folder', { 
+                    requestId, 
+                    performanceTitle
+                });
+                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId, requestId);
 
                 if (!performanceFolderId) {
-                    console.log('Performance folder not found, nothing to delete');
+                    log('delete', 'info', 'Performance folder not found', { requestId });
                     return NextResponse.json({ success: true, message: 'No files found to delete' });
                 }
 
-                console.log(`Deleting performance folder: "${performanceTitle}" (${performanceFolderId})`);
+                log('delete', 'info', 'Deleting performance folder', { 
+                    requestId, 
+                    performanceTitle, 
+                    performanceFolderId
+                });
                 await drive.files.delete({
                     fileId: performanceFolderId,
                 });
 
-                console.log('Performance folder deleted successfully');
+                log('delete', 'info', 'Performance folder deleted successfully', { requestId });
                 break;
             }
 
             case 'rehearsal': {
                 // Find performance folder
-                console.log(`Looking for performance folder: "${performanceTitle}"`);
-                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId);
+                log('delete', 'info', 'Looking for performance folder', { 
+                    requestId, 
+                    performanceTitle
+                });
+                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId, requestId);
 
                 if (!performanceFolderId) {
-                    console.log('Performance folder not found, nothing to delete');
+                    log('delete', 'info', 'Performance folder not found', { requestId });
                     return NextResponse.json({ success: true, message: 'No files found to delete' });
                 }
 
                 // Find and delete rehearsal folder
-                console.log(`Looking for rehearsal folder: "${rehearsalTitle}"`);
-                const rehearsalFolderId = await findFolder(drive, rehearsalTitle, performanceFolderId);
+                log('delete', 'info', 'Looking for rehearsal folder', { 
+                    requestId, 
+                    rehearsalTitle
+                });
+                const rehearsalFolderId = await findFolder(drive, rehearsalTitle, performanceFolderId, requestId);
 
                 if (!rehearsalFolderId) {
-                    console.log('Rehearsal folder not found, nothing to delete');
+                    log('delete', 'info', 'Rehearsal folder not found', { requestId });
                     return NextResponse.json({ success: true, message: 'No files found to delete' });
                 }
 
-                console.log(`Deleting rehearsal folder: "${rehearsalTitle}" (${rehearsalFolderId})`);
+                log('delete', 'info', 'Deleting rehearsal folder', { 
+                    requestId, 
+                    rehearsalTitle, 
+                    rehearsalFolderId
+                });
                 await drive.files.delete({
                     fileId: rehearsalFolderId,
                 });
 
-                console.log('Rehearsal folder deleted successfully');
+                log('delete', 'info', 'Rehearsal folder deleted successfully', { requestId });
                 break;
             }
 
             case 'recording': {
                 // Find performance folder
-                console.log(`Looking for performance folder: "${performanceTitle}"`);
-                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId);
+                log('delete', 'info', 'Looking for performance folder', { 
+                    requestId, 
+                    performanceTitle
+                });
+                const performanceFolderId = await findFolder(drive, performanceTitle, rootFolderId, requestId);
 
                 if (!performanceFolderId) {
-                    console.log('Performance folder not found, nothing to delete');
+                    log('delete', 'info', 'Performance folder not found', { requestId });
                     return NextResponse.json({ success: true, message: 'No files found to delete' });
                 }
 
                 // Find rehearsal folder
                 const rehearsalFolderName = rehearsalTitle || 'Default Rehearsal';
-                console.log(`Looking for rehearsal folder: "${rehearsalFolderName}"`);
-                const rehearsalFolderId = await findFolder(drive, rehearsalFolderName, performanceFolderId);
+                log('delete', 'info', 'Looking for rehearsal folder', { 
+                    requestId, 
+                    rehearsalFolderName
+                });
+                const rehearsalFolderId = await findFolder(drive, rehearsalFolderName, performanceFolderId, requestId);
 
                 if (!rehearsalFolderId) {
-                    console.log('Rehearsal folder not found, nothing to delete');
+                    log('delete', 'info', 'Rehearsal folder not found', { requestId });
                     return NextResponse.json({ success: true, message: 'No files found to delete' });
                 }
 
                 // Find recording files
-                console.log(`Looking for recording files in rehearsal folder: "${recordingTitle}"`);
+                log('delete', 'info', 'Looking for recording files', { 
+                    requestId, 
+                    recordingTitle,
+                    rehearsalFolderId
+                });
                 const res = await drive.files.list({
                     q: `'${rehearsalFolderId}' in parents and (name='${recordingTitle}.mp4' or name='${recordingTitle}_thumb.jpg') and trashed=false`,
                     fields: 'files(id, name)',
@@ -149,27 +192,44 @@ export async function deleteItem(request: NextRequest) {
                 });
 
                 if (res.data.files && res.data.files.length > 0) {
-                    console.log(`Found ${res.data.files.length} files to delete for recording: "${recordingTitle}"`);
+                    log('delete', 'info', 'Found files to delete', { 
+                        requestId, 
+                        fileCount: res.data.files.length,
+                        recordingTitle
+                    });
 
                     for (const file of res.data.files) {
-                        console.log(`Deleting file: "${file.name}" (${file.id})`);
+                        log('delete', 'info', 'Deleting file', { 
+                            requestId, 
+                            fileName: file.name,
+                            fileId: file.id
+                        });
                         await drive.files.delete({
                             fileId: file.id as string,
                         });
                     }
 
-                    console.log('Recording files deleted successfully');
+                    log('delete', 'info', 'Recording files deleted successfully', { requestId });
                 } else {
-                    console.log(`No files found for recording: "${recordingTitle}"`);
+                    log('delete', 'info', 'No files found for recording', { 
+                        requestId, 
+                        recordingTitle
+                    });
                 }
 
                 break;
             }
 
             default:
+                log('delete', 'error', 'Invalid delete type', { requestId, type });
                 return NextResponse.json({ error: `Invalid delete type: ${type}` }, { status: 400 });
         }
 
+        log('delete', 'info', 'Delete operation completed successfully', { 
+            requestId, 
+            type
+        });
+        
         return NextResponse.json({
             success: true,
             message: `${type} deleted successfully`,
@@ -191,6 +251,11 @@ export async function deleteItem(request: NextRequest) {
                 error.message.includes('invalid_grant') ||
                 error.message.includes('token has been expired or revoked')
             ) {
+                log('delete', 'error', 'Google Drive authentication error', { 
+                    requestId, 
+                    error: errorMessage
+                });
+                
                 return NextResponse.json({
                     error: 'Google Drive connection error',
                     details: 'Your Google Drive connection has expired. Please reconnect in Settings.',
@@ -199,6 +264,12 @@ export async function deleteItem(request: NextRequest) {
             }
         }
 
+        log('delete', 'error', 'Unhandled error in delete operation', { 
+            requestId, 
+            error: errorMessage,
+            errorDetails
+        });
+        
         throw error;
     }
 } 

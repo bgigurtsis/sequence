@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { GoogleDriveServerService } from '../../../../lib/server/GoogleDriveServerService';
+import { googleDriveService } from '@/lib/GoogleDriveService';
 
 /**
  * API route to handle file uploads to Google Drive
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     
     // Upload the file to Google Drive
-    const uploadedFile = await GoogleDriveServerService.uploadFile(
+    const uploadedFile = await googleDriveService.uploadFileWithBuffer(
       userId,
       fileBuffer,
       fileName,

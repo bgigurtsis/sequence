@@ -1,81 +1,56 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs/server';
-import { googleDriveService } from '@/lib/GoogleDriveService';
-import { getOAuthConnectionStatus } from '@/lib/clerkTokenManager';
+import { auth } from "@clerk/nextjs/server";
+import { NextRequest, NextResponse } from "next/server";
+import { generateAuthUrl } from "@/lib/googleOAuthManager";
 
 /**
- * Handle Google Drive reconnection requests
- * This is used when a user has an OAuth account but no valid token
+ * Handle Google account reconnection requests by providing a URL to trigger OAuth flow
  */
-export async function GET(request: NextRequest) {
-  const timestamp = new Date().toISOString();
-  console.log(`[${timestamp}][API][auth/google-reconnect] Reconnect handler called`);
+export async function POST(request: NextRequest) {
+  const { userId, sessionId } = auth();
   
-  try {
-    // Get the authenticated user
-    const authResult = await auth();
-    const userId = authResult.userId;
-    const sessionId = authResult.sessionId;
-    
-    console.log(`[${timestamp}][API][auth/google-reconnect] Auth result`, {
-      hasAuth: !!authResult,
-      userId,
-      sessionId,
-      path: request.nextUrl.pathname
-    });
-    
-    // Check authentication
-    if (!userId) {
-      console.log(`[${timestamp}][API][auth/google-reconnect] No userId found`);
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
-    
-    // Check the current OAuth status
-    const status = await getOAuthConnectionStatus(userId);
-    
-    console.log(`[${timestamp}][API][auth/google-reconnect] OAuth status`, status);
-    
-    // Generate an auth URL for reconnecting
-    try {
-      const url = googleDriveService.generateAuthUrl();
-      
-      // Include the session ID in the state parameter for verification
-      const stateParams = new URLSearchParams({
-        sessionId: sessionId || '',
-        userId,
-        reconnect: 'true'
-      });
-      
-      // Add state to the URL
-      const urlWithState = `${url}&state=${encodeURIComponent(stateParams.toString())}`;
-      
-      console.log(`[${timestamp}][API][auth/google-reconnect] Generated auth URL length: ${urlWithState.length}`);
-      
-      return NextResponse.json({ 
-        url: urlWithState,
-        hasOAuthAccount: status.hasOAuthAccount,
-        needsReconnect: status.needsReconnect,
-        userId
-      });
-    } catch (error) {
-      console.error(`[${timestamp}][API][auth/google-reconnect] Error generating auth URL:`, error);
-      
-      return NextResponse.json(
-        { 
-          error: error instanceof Error ? error.message : 'Unknown error generating auth URL',
-          code: 'AUTH_URL_ERROR'
-        },
-        { status: 500 }
-      );
-    }
-  } catch (error) {
-    console.error(`[${timestamp}][API][auth/google-reconnect] Error in handler:`, error);
-    
+  // Generate a unique request ID for tracing
+  const requestId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  
+  console.log(`[GoogleReconnect][${requestId}] OAuth reconnection requested`, {
+    userId: userId || 'not authenticated',
+    sessionId: sessionId || 'no session'
+  });
+
+  // If no user is authenticated, return error
+  if (!userId) {
+    console.error(`[GoogleReconnect][${requestId}] No authenticated user found`);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
+      {
+        success: false,
+        message: "User not authenticated",
+      },
+      { status: 401 }
+    );
+  }
+
+  try {
+    // Use the centralized utility to generate the OAuth URL with reconnect=true
+    const redirectUrl = generateAuthUrl(sessionId || '', userId, true);
+    
+    console.log(`[GoogleReconnect][${requestId}] Generated redirect URL for reconnection`);
+    
+    return NextResponse.json({
+      success: true,
+      reconnectUrl: redirectUrl,
+      message: "Please use the provided URL to reconnect your Google account"
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[GoogleReconnect][${requestId}] Error creating reconnection URL:`, {
+      error: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: `Error creating reconnection URL: ${errorMessage}`,
+      },
       { status: 500 }
     );
   }

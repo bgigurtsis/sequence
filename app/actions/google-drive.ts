@@ -1,7 +1,7 @@
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
-import { GoogleDriveServerService } from '../../lib/server/GoogleDriveServerService';
+import { googleDriveService } from '@/lib/GoogleDriveService';
 import { revalidatePath } from 'next/cache';
 
 /**
@@ -19,7 +19,7 @@ export async function listDriveFiles(folderId?: string, pageSize: number = 100) 
       return { error: 'Authentication required' };
     }
     
-    const files = await GoogleDriveServerService.listFiles(
+    const files = await googleDriveService.listFiles(
       userId,
       folderId,
       pageSize
@@ -49,7 +49,7 @@ export async function createDriveFolder(name: string, parentId?: string) {
       return { error: 'Authentication required' };
     }
     
-    const folder = await GoogleDriveServerService.createFolder(
+    const folder = await googleDriveService.createFolder(
       userId,
       name,
       parentId
@@ -81,7 +81,7 @@ export async function deleteDriveFile(fileId: string) {
       return { error: 'Authentication required' };
     }
     
-    await GoogleDriveServerService.deleteFile(userId, fileId);
+    await googleDriveService.deleteFile(userId, fileId);
     
     // Revalidate the files listing path to reflect changes
     revalidatePath('/dashboard');
@@ -109,7 +109,7 @@ export async function getDriveFile(fileId: string) {
       return { error: 'Authentication required' };
     }
     
-    const file = await GoogleDriveServerService.getFile(userId, fileId);
+    const file = await googleDriveService.getFile(userId, fileId);
     
     return { file };
   } catch (error) {

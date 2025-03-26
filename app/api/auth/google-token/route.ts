@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
-import { clerkClient } from '@clerk/nextjs/server';
+import { getGoogleOAuthToken } from '@/lib/googleOAuthManager';
 
 /**
  * API route to securely retrieve Google OAuth tokens
@@ -22,27 +22,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Fetch the user's OAuth token for Google from Clerk
-    const oauthTokens = await clerkClient.users.getUserOauthAccessToken(
-      userId,
-      'oauth_google'
-    );
+    // Fetch the user's OAuth token for Google using our centralized utility
+    const { token, provider } = await getGoogleOAuthToken(userId);
 
     // Check if we got a valid token
-    if (!oauthTokens || oauthTokens.data.length === 0) {
+    if (!token) {
       return NextResponse.json(
         { error: 'No Google OAuth connection found' },
         { status: 404 }
       );
     }
 
-    // Get the first token (most recent)
-    const { token } = oauthTokens.data[0];
-
     // Create a response with the token information
-    // In production, consider whether you need additional security measures
     return NextResponse.json({
-      provider: 'google',
+      provider,
       access_token: token,
       status: 'success'
     });

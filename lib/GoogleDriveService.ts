@@ -1,6 +1,8 @@
 // lib/GoogleDriveService.ts
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
+import { getUserGoogleAuthClient } from './googleOAuthManager';
+import { clerkClient } from '@clerk/nextjs/server';
 
 // Types
 interface FileUploadResult {
@@ -8,6 +10,7 @@ interface FileUploadResult {
     fileId: string;
     fileName: string;
     thumbnailId?: string;
+    thumbnailLink?: string;
     webViewLink?: string;
 }
 
@@ -28,6 +31,19 @@ interface DriveMetadata {
     [key: string]: any;
 }
 
+interface GoogleDriveFile {
+    id: string;
+    name: string;
+    mimeType: string;
+    webViewLink?: string;
+    thumbnailLink?: string;
+    createdTime?: string;
+    modifiedTime?: string;
+    size?: string;
+    parents?: string[];
+    appProperties?: Record<string, string>;
+}
+
 /**
  * GoogleDriveService - A centralized service for all Google Drive operations
  * 
@@ -37,6 +53,8 @@ interface DriveMetadata {
  * - File uploads and downloads
  * - Metadata operations
  * - Error handling and logging
+ * 
+ * It combines functionality from both client and server services
  */
 export class GoogleDriveService {
     private readonly ROOT_FOLDER_NAME = 'StageVault Recordings';
@@ -53,15 +71,13 @@ export class GoogleDriveService {
         const checkId = Math.random().toString(36).substring(2, 8); // Unique ID for this check
         
         try {
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] Starting connection check for userId: ${userId.substring(0, 5)}...`);
+            this.logOperation('start', `[${checkId}] Checking Google Drive connection`, { userId });
 
             // Create an OAuth client for this user
             // This will automatically get the token from Clerk's wallet
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating OAuth client and retrieving token...`);
-            const oauth2Client = await this.getUserAuthClient(userId);
+            const oauth2Client = await getUserGoogleAuthClient(userId);
             
             if (!oauth2Client) {
-                console.error(`[GoogleDriveService:checkConnection][${checkId}] Failed to get OAuth client - null returned`);
                 this.logOperation('error', `[${checkId}] Failed to get OAuth client`, { 
                     userId,
                     reason: 'OAuth client creation failed - likely a token issue'
@@ -70,24 +86,11 @@ export class GoogleDriveService {
             }
 
             // Check token validity directly
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] Checking OAuth client credentials`);
-            
-            // Log credential existence but not the actual tokens
             if (!oauth2Client.credentials) {
-                console.error(`[GoogleDriveService:checkConnection][${checkId}] OAuth client has no credentials object`);
                 throw new Error('No credentials in OAuth client');
             }
             
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] OAuth credentials available with properties:`, {
-                hasAccessToken: !!oauth2Client.credentials.access_token,
-                hasRefreshToken: !!oauth2Client.credentials.refresh_token,
-                hasExpiry: !!oauth2Client.credentials.expiry_date,
-                scope: oauth2Client.credentials.scope,
-                tokenType: oauth2Client.credentials.token_type
-            });
-            
             if (!oauth2Client.credentials.access_token) {
-                console.error(`[GoogleDriveService:checkConnection][${checkId}] No access token in OAuth client credentials`);
                 this.logOperation('error', `[${checkId}] No access token in OAuth client credentials`, {
                     userId,
                     hasCredentials: !!oauth2Client.credentials,
@@ -96,13 +99,12 @@ export class GoogleDriveService {
                 throw new Error('Missing Google access token');
             }
 
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating Google Drive client`);
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
             // With drive.file scope, we can't list all files, so instead:
             // 1. Try to create a test folder
             // 2. Then delete it if successful
-            console.log(`[GoogleDriveService:checkConnection][${checkId}] Creating test folder to verify API access`);
+            this.logOperation('debug', `[${checkId}] Creating test folder to verify API access`);
             
             try {
                 const testFolder = await drive.files.create({
@@ -113,47 +115,23 @@ export class GoogleDriveService {
                     fields: 'id'
                 });
 
-                console.log(`[GoogleDriveService:checkConnection][${checkId}] Test folder created with response:`, {
-                    success: !!testFolder,
-                    status: testFolder.status,
-                    hasData: !!testFolder.data,
-                    folderId: testFolder?.data?.id ? `${testFolder.data.id.substring(0, 5)}...` : 'none'
-                });
-
                 if (testFolder?.data?.id) {
                     // Successfully created folder, now delete it
-                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Deleting test folder ${testFolder.data.id.substring(0, 5)}...`);
-                    
-                    const deleteResponse = await drive.files.delete({
+                    await drive.files.delete({
                         fileId: testFolder.data.id
                     });
                     
-                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Delete response:`, {
-                        status: deleteResponse.status,
-                        statusText: deleteResponse.statusText
-                    });
-                    
-                    console.log(`[GoogleDriveService:checkConnection][${checkId}] Google Drive connection successful`);
+                    this.logOperation('success', `[${checkId}] Google Drive connection successful`);
                     return true;
                 }
 
-                console.error(`[GoogleDriveService:checkConnection][${checkId}] Failed to create test folder - incomplete response`);
-                this.logOperation('error', `[${checkId}] Failed to create test folder - incomplete response`, {
-                    userId,
-                    response: JSON.stringify(testFolder || {})
-                });
+                this.logOperation('error', `[${checkId}] Failed to create test folder - incomplete response`);
                 return false;
             } catch (folderError) {
                 // Capture specific folder operation errors
                 const errorMessage = folderError instanceof Error ? folderError.message : String(folderError);
                 const errorStatus = (folderError as any)?.response?.status || 'unknown';
                 const errorDetails = (folderError as any)?.response?.data || {};
-                
-                console.error(`[GoogleDriveService:checkConnection][${checkId}] Drive folder operation failed:`, {
-                    message: errorMessage,
-                    status: errorStatus,
-                    details: JSON.stringify(errorDetails)
-                });
                 
                 this.logOperation('error', `[${checkId}] Drive folder operation failed: ${errorMessage}`, {
                     userId,
@@ -173,13 +151,6 @@ export class GoogleDriveService {
                                errorMessage.includes('credentials') ||
                                errorMessage.includes('permission');
                                
-            console.error(`[GoogleDriveService:checkConnection][${checkId}] Google Drive connection failed:`, {
-                message: errorMessage,
-                isAuthError,
-                errorType: error instanceof Error ? error.name : 'Unknown',
-                errorStack: error instanceof Error ? error.stack?.substring(0, 500) : null
-            });
-            
             this.logOperation('error', `[${checkId}] Google Drive connection failed: ${errorMessage}`, {
                 userId,
                 isAuthError,
@@ -219,13 +190,6 @@ export class GoogleDriveService {
                 'https://www.googleapis.com/auth/drive.file',
                 'https://www.googleapis.com/auth/drive.metadata.readonly'
             ];
-            
-            this.logOperation('debug', 'Configuring OAuth parameters', {
-                scopes,
-                access_type: 'offline',
-                prompt: 'consent',
-                redirect_uri: this.REDIRECT_URI
-            });
 
             const url = oauth2Client.generateAuthUrl({
                 access_type: 'offline',
@@ -270,28 +234,8 @@ export class GoogleDriveService {
             const oauth2Client = this.createOAuth2Client();
             
             // Using getToken to exchange code for tokens
-            this.logOperation('debug', 'Calling getToken method', { 
-                client_id: this.CLIENT_ID.substring(0, 5) + '...',
-                redirect_uri: this.REDIRECT_URI
-            });
-            
             const { tokens } = await oauth2Client.getToken(code);
             
-            this.logOperation('debug', 'Token exchange response received', {
-                hasAccessToken: !!tokens.access_token,
-                hasRefreshToken: !!tokens.refresh_token,
-                hasExpiry: !!tokens.expiry_date,
-                scope: tokens.scope
-            });
-
-            if (!tokens.refresh_token) {
-                this.logOperation('error', 'No refresh token returned', {
-                    possibleCause: 'Make sure you set prompt=consent and access_type=offline',
-                    receivedScopes: tokens.scope
-                });
-                throw new Error('No refresh token returned. Make sure you set prompt=consent and access_type=offline');
-            }
-
             this.logOperation('success', 'Successfully exchanged code for tokens', {
                 tokenType: tokens.token_type,
                 scopes: tokens.scope?.split(' '),
@@ -306,7 +250,146 @@ export class GoogleDriveService {
     }
 
     /**
-     * Upload a file to Google Drive
+     * Creates a folder in Google Drive
+     * 
+     * @param userId The Clerk user ID
+     * @param name The name of the folder to create
+     * @param parentId Optional parent folder ID
+     * @returns The created folder object
+     */
+    async createFolder(
+        userId: string,
+        name: string,
+        parentId?: string
+    ): Promise<GoogleDriveFile> {
+        try {
+            this.logOperation('start', `Creating folder '${name}'`, { userId, parentId });
+
+            const oauth2Client = await getUserGoogleAuthClient(userId);
+            const drive = google.drive({ version: 'v3', auth: oauth2Client });
+            
+            const metadata = {
+                name,
+                mimeType: 'application/vnd.google-apps.folder',
+                ...(parentId && { parents: [parentId] })
+            };
+            
+            const response = await drive.files.create({
+                requestBody: metadata,
+                fields: 'id,name,mimeType,webViewLink,thumbnailLink,createdTime,modifiedTime,size,parents'
+            });
+            
+            if (!response.data) {
+                throw new Error('Failed to create folder: No data returned');
+            }
+            
+            this.logOperation('success', `Folder '${name}' created successfully`, { id: response.data.id });
+            return response.data as GoogleDriveFile;
+        } catch (error) {
+            this.logOperation('error', `Failed to create folder '${name}': ${(error as Error).message}`, error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Lists files in Google Drive, optionally from a specific folder
+     * 
+     * @param userId The Clerk user ID
+     * @param folderId Optional folder ID to list files from
+     * @param pageSize Optional limit on the number of files to return
+     * @returns An array of Google Drive files
+     */
+    async listFiles(
+        userId: string,
+        folderId?: string,
+        pageSize: number = 100
+    ): Promise<GoogleDriveFile[]> {
+        try {
+            this.logOperation('start', 'Listing files', { userId, folderId, pageSize });
+
+            const oauth2Client = await getUserGoogleAuthClient(userId);
+            const drive = google.drive({ version: 'v3', auth: oauth2Client });
+            
+            let query = "trashed = false";
+            if (folderId) {
+                query += ` and '${folderId}' in parents`;
+            }
+            
+            const response = await drive.files.list({
+                q: query,
+                pageSize: pageSize,
+                fields: 'files(id,name,mimeType,webViewLink,thumbnailLink,createdTime,modifiedTime,size,parents,appProperties)'
+            });
+            
+            this.logOperation('success', `Listed ${response.data.files?.length || 0} files`);
+            return response.data.files as GoogleDriveFile[] || [];
+        } catch (error) {
+            this.logOperation('error', `Failed to list files: ${(error as Error).message}`, error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Gets a file from Google Drive by ID
+     * 
+     * @param userId The Clerk user ID
+     * @param fileId The Google Drive file ID
+     * @returns The file object
+     */
+    async getFile(
+        userId: string,
+        fileId: string
+    ): Promise<GoogleDriveFile> {
+        try {
+            this.logOperation('start', `Getting file '${fileId}'`, { userId });
+
+            const oauth2Client = await getUserGoogleAuthClient(userId);
+            const drive = google.drive({ version: 'v3', auth: oauth2Client });
+            
+            const response = await drive.files.get({
+                fileId: fileId,
+                fields: 'id,name,mimeType,webViewLink,thumbnailLink,createdTime,modifiedTime,size,parents,appProperties'
+            });
+            
+            if (!response.data) {
+                throw new Error(`Failed to get file: ${fileId}`);
+            }
+            
+            this.logOperation('success', `Retrieved file '${fileId}'`);
+            return response.data as GoogleDriveFile;
+        } catch (error) {
+            this.logOperation('error', `Failed to get file '${fileId}': ${(error as Error).message}`, error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Delete a file from Google Drive
+     * @param userId - The user's ID (used to get OAuth token)
+     * @param fileId - ID of the file to delete
+     * @returns True if deletion was successful
+     */
+    async deleteFile(userId: string, fileId: string): Promise<boolean> {
+        try {
+            this.logOperation('start', `Deleting file '${fileId}'`, { userId });
+
+            const oauth2Client = await getUserGoogleAuthClient(userId);
+            const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+            await drive.files.delete({
+                fileId: fileId
+            });
+
+            this.logOperation('success', `File '${fileId}' deleted successfully`);
+            return true;
+        } catch (error) {
+            this.logOperation('error', `Failed to delete file '${fileId}': ${(error as Error).message}`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Upload a file to Google Drive (works with Blob for client-side uploads)
      * @param userId - The user's ID (used to get OAuth token)
      * @param file - Blob or File to upload
      * @param metadata - File metadata including performance/rehearsal info
@@ -320,16 +403,10 @@ export class GoogleDriveService {
         thumbnail?: Blob
     ): Promise<FileUploadResult> {
         try {
-            this.logOperation('start', 'Uploading file to Google Drive', { userId });
+            this.logOperation('start', 'Uploading file to Google Drive (Blob)', { userId });
 
             // Get OAuth client for this user
-            const oauth2Client = await this.getUserAuthClient(userId);
-            
-            if (!oauth2Client) {
-                throw new Error('Failed to get OAuth client for user');
-            }
-            
-            // Use the OAuth client for Drive API
+            const oauth2Client = await getUserGoogleAuthClient(userId);
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
             // Create a root folder for the app if it doesn't exist
@@ -395,76 +472,63 @@ export class GoogleDriveService {
     }
 
     /**
-     * List files in a specific folder in Google Drive
-     * @param userId - The user's ID (used to get OAuth token)
-     * @param folderId - Optional folder ID (uses root folder if not specified)
-     * @returns Array of file metadata objects
+     * Uploads a file to Google Drive (works with Buffer for server-side uploads)
+     * 
+     * @param userId The Clerk user ID
+     * @param file The file to upload (as Buffer)
+     * @param fileName The name to give the file
+     * @param mimeType The mime type of the file
+     * @param folderId Optional folder ID to upload to
+     * @returns The uploaded file object
      */
-    async listFiles(userId: string, folderId?: string): Promise<any[]> {
+    async uploadFileWithBuffer(
+        userId: string,
+        file: Buffer | Blob,
+        fileName: string,
+        mimeType: string,
+        folderId?: string
+    ): Promise<GoogleDriveFile> {
         try {
-            this.logOperation('start', 'Listing files');
+            this.logOperation('start', `Uploading file '${fileName}'`, { userId, mimeType, folderId });
 
-            const oauth2Client = await this.getUserAuthClient(userId);
-            
-            if (!oauth2Client) {
-                throw new Error('Failed to get OAuth client for user');
-            }
-
+            const oauth2Client = await getUserGoogleAuthClient(userId);
             const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-            // If no folder specified, get the root folder
-            if (!folderId) {
-                this.logOperation('progress', 'No folder ID specified, finding root folder');
-                const rootFolder = await this.findRootFolder(userId);
-                folderId = rootFolder?.id;
+            
+            // Handle Buffer vs Blob
+            let fileMedia;
+            if (file instanceof Buffer) {
+                fileMedia = {
+                    body: file
+                };
+            } else {
+                // For Blob, convert to ArrayBuffer
+                // Use type assertion to tell TypeScript this is a Blob with arrayBuffer method
+                const blob = file as Blob;
+                const arrayBuffer = await blob.arrayBuffer();
+                fileMedia = {
+                    body: Buffer.from(arrayBuffer)
+                };
             }
-
-            if (!folderId) {
-                throw new Error('Could not determine folder ID for listing files');
-            }
-
-            this.logOperation('progress', `Listing files in folder ID: ${folderId}`);
-            const response = await drive.files.list({
-                q: `'${folderId}' in parents and trashed = false`,
-                fields: 'files(id, name, mimeType, webViewLink, thumbnailLink, createdTime, modifiedTime, size, appProperties)',
-                orderBy: 'modifiedTime desc'
+            
+            const response = await drive.files.create({
+                requestBody: {
+                    name: fileName,
+                    mimeType: mimeType,
+                    ...(folderId && { parents: [folderId] })
+                },
+                media: fileMedia,
+                fields: 'id,name,mimeType,webViewLink,thumbnailLink,createdTime,modifiedTime,size,parents'
             });
-
-            this.logOperation('success', `Listed ${response.data.files?.length || 0} files`);
-            return response.data.files || [];
+            
+            if (!response.data) {
+                throw new Error('Failed to upload file: No data returned');
+            }
+            
+            this.logOperation('success', `File '${fileName}' uploaded successfully`, { id: response.data.id });
+            return response.data as GoogleDriveFile;
         } catch (error) {
-            this.logOperation('error', `Failed to list files: ${(error as Error).message}`);
+            this.logOperation('error', `Failed to upload file '${fileName}': ${(error as Error).message}`, error);
             throw error;
-        }
-    }
-
-    /**
-     * Delete a file from Google Drive
-     * @param userId - The user's ID (used to get OAuth token)
-     * @param fileId - ID of the file to delete
-     * @returns True if deletion was successful
-     */
-    async deleteFile(userId: string, fileId: string): Promise<boolean> {
-        try {
-            this.logOperation('start', `Deleting file with ID: ${fileId}`);
-
-            const oauth2Client = await this.getUserAuthClient(userId);
-            
-            if (!oauth2Client) {
-                throw new Error('Failed to get OAuth client for user');
-            }
-
-            const drive = google.drive({ version: 'v3', auth: oauth2Client });
-
-            await drive.files.delete({
-                fileId: fileId
-            });
-
-            this.logOperation('success', `File deleted successfully`);
-            return true;
-        } catch (error) {
-            this.logOperation('error', `Failed to delete file: ${(error as Error).message}`);
-            return false;
         }
     }
 
@@ -483,7 +547,7 @@ export class GoogleDriveService {
     }
 
     /**
-     * Upload a file to a specific folder
+     * Upload a file to a specific folder using fetch API (for binary uploads)
      * @param drive - Google Drive API object
      * @param blob - File contents as Blob
      * @param folderId - Target folder ID
@@ -538,51 +602,34 @@ export class GoogleDriveService {
      * @returns ID of the root folder
      */
     private async ensureRootFolder(drive: any): Promise<string> {
-        // Check if the folder already exists
-        const searchResponse = await fetch(
-            `https://www.googleapis.com/drive/v3/files?q=name='${this.ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-            {
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
-                }
+        try {
+            // Check if the folder already exists
+            const response = await drive.files.list({
+                q: `name='${this.ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+                fields: 'files(id, name)'
+            });
+
+            // If folder exists, return its ID
+            if (response.data.files && response.data.files.length > 0) {
+                this.logOperation('info', `Root folder "${this.ROOT_FOLDER_NAME}" already exists`);
+                return response.data.files[0].id;
             }
-        );
 
-        if (!searchResponse.ok) {
-            throw new Error(`Failed to search for root folder: ${searchResponse.status}`);
-        }
-
-        const searchData = await searchResponse.json();
-
-        // If folder exists, return its ID
-        if (searchData.files && searchData.files.length > 0) {
-            this.logOperation('info', `Root folder "${this.ROOT_FOLDER_NAME}" already exists`);
-            return searchData.files[0].id;
-        }
-
-        // If folder doesn't exist, create it
-        this.logOperation('info', `Creating root folder "${this.ROOT_FOLDER_NAME}"`);
-        const createResponse = await fetch(
-            'https://www.googleapis.com/drive/v3/files',
-            {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
+            // If folder doesn't exist, create it
+            this.logOperation('info', `Creating root folder "${this.ROOT_FOLDER_NAME}"`);
+            const createResponse = await drive.files.create({
+                requestBody: {
                     name: this.ROOT_FOLDER_NAME,
                     mimeType: 'application/vnd.google-apps.folder'
-                })
-            }
-        );
+                },
+                fields: 'id'
+            });
 
-        if (!createResponse.ok) {
-            throw new Error(`Failed to create root folder: ${createResponse.status}`);
+            return createResponse.data.id;
+        } catch (error) {
+            this.logOperation('error', `Failed to ensure root folder: ${(error as Error).message}`, error);
+            throw error;
         }
-
-        const createData = await createResponse.json();
-        return createData.id;
     }
 
     /**
@@ -592,7 +639,7 @@ export class GoogleDriveService {
      */
     private async findRootFolder(userId: string): Promise<FolderInfo | null> {
         try {
-            const oauth2Client = await this.getUserAuthClient(userId);
+            const oauth2Client = await getUserGoogleAuthClient(userId);
             
             if (!oauth2Client) {
                 throw new Error('Failed to get OAuth client for user');
@@ -633,54 +680,37 @@ export class GoogleDriveService {
         performanceId: string,
         performanceTitle: string
     ): Promise<string> {
-        const folderName = `${performanceTitle} (${performanceId})`;
+        try {
+            const folderName = `${performanceTitle} (${performanceId})`;
 
-        // Check if the folder already exists
-        const searchResponse = await fetch(
-            `https://www.googleapis.com/drive/v3/files?q=name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-            {
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
-                }
+            // Check if the folder already exists
+            const response = await drive.files.list({
+                q: `name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+                fields: 'files(id, name)'
+            });
+
+            // If folder exists, return its ID
+            if (response.data.files && response.data.files.length > 0) {
+                this.logOperation('info', `Performance folder "${folderName}" already exists`);
+                return response.data.files[0].id;
             }
-        );
 
-        if (!searchResponse.ok) {
-            throw new Error(`Failed to search for performance folder: ${searchResponse.status}`);
-        }
-
-        const searchData = await searchResponse.json();
-
-        // If folder exists, return its ID
-        if (searchData.files && searchData.files.length > 0) {
-            this.logOperation('info', `Performance folder "${folderName}" already exists`);
-            return searchData.files[0].id;
-        }
-
-        // If folder doesn't exist, create it
-        this.logOperation('info', `Creating performance folder "${folderName}"`);
-        const createResponse = await fetch(
-            'https://www.googleapis.com/drive/v3/files',
-            {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
+            // If folder doesn't exist, create it
+            this.logOperation('info', `Creating performance folder "${folderName}"`);
+            const createResponse = await drive.files.create({
+                requestBody: {
                     name: folderName,
                     mimeType: 'application/vnd.google-apps.folder',
                     parents: [parentId]
-                })
-            }
-        );
+                },
+                fields: 'id'
+            });
 
-        if (!createResponse.ok) {
-            throw new Error(`Failed to create performance folder: ${createResponse.status}`);
+            return createResponse.data.id;
+        } catch (error) {
+            this.logOperation('error', `Failed to ensure performance folder: ${(error as Error).message}`, error);
+            throw error;
         }
-
-        const createData = await createResponse.json();
-        return createData.id;
     }
 
     /**
@@ -694,32 +724,26 @@ export class GoogleDriveService {
         fileId: string,
         metadata: DriveMetadata
     ): Promise<void> {
-        // Convert all metadata values to strings
-        const appProperties: Record<string, string> = {};
+        try {
+            // Convert all metadata values to strings
+            const appProperties: Record<string, string> = {};
 
-        for (const [key, value] of Object.entries(metadata)) {
-            if (value !== undefined && value !== null) {
-                appProperties[key] = String(value);
+            for (const [key, value] of Object.entries(metadata)) {
+                if (value !== undefined && value !== null) {
+                    appProperties[key] = String(value);
+                }
             }
-        }
 
-        // Update the file with the metadata as appProperties
-        const response = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${fileId}`,
-            {
-                method: 'PATCH',
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
+            // Update the file with the metadata as appProperties
+            await drive.files.update({
+                fileId: fileId,
+                requestBody: {
                     appProperties
-                })
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`Failed to add metadata to file: ${response.status}`);
+                }
+            });
+        } catch (error) {
+            this.logOperation('error', `Failed to add metadata to file: ${(error as Error).message}`, error);
+            throw error;
         }
     }
 
@@ -734,21 +758,12 @@ export class GoogleDriveService {
         fileId: string
     ): Promise<string | undefined> {
         try {
-            const response = await fetch(
-                `https://www.googleapis.com/drive/v3/files/${fileId}?fields=webViewLink`,
-                {
-                    headers: {
-                        Authorization: `Bearer ${drive.auth.credentials.access_token}`
-                    }
-                }
-            );
+            const response = await drive.files.get({
+                fileId: fileId,
+                fields: 'webViewLink'
+            });
 
-            if (!response.ok) {
-                throw new Error(`Failed to get file info: ${response.status}`);
-            }
-
-            const data = await response.json();
-            return data.webViewLink || '';
+            return response.data.webViewLink || '';
         } catch (error) {
             this.logOperation('error', `Failed to get web view link: ${(error as Error).message}`);
             return undefined;
@@ -796,95 +811,6 @@ export class GoogleDriveService {
             } catch (loggingError) {
                 console.error(`${prefix} Error processing error details:`, loggingError);
             }
-        }
-    }
-
-    /**
-     * Get a Google Auth client for a specific user
-     * This abstracts the token acquisition
-     * @param userId - The user's ID
-     * @returns The OAuth2 client
-     */
-    private async getUserAuthClient(userId: string): Promise<OAuth2Client | null> {
-        const authId = Math.random().toString(36).substring(2, 8); // Unique ID for this auth process
-        
-        console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Creating auth client for userId: ${userId.substring(0, 5)}...`);
-        
-        try {
-            // Import the entire module and use its exported function
-            console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Importing googleAuth module...`);
-            const googleAuth = await import('@/lib/googleAuth');
-            
-            console.log(`[GoogleDriveService:getUserAuthClient][${authId}] Calling getUserGoogleAuthClient...`);
-            const startTime = Date.now();
-            
-            try {
-                const client = await googleAuth.getUserGoogleAuthClient(userId);
-                const duration = Date.now() - startTime;
-                
-                // Check if client has credentials and log (without sensitive data)
-                const hasCredentials = !!client?.credentials;
-                const hasAccessToken = hasCredentials && !!client.credentials.access_token;
-                const hasRefreshToken = hasCredentials && !!client.credentials.refresh_token;
-                
-                console.log(`[GoogleDriveService:getUserAuthClient][${authId}] getUserGoogleAuthClient succeeded (took ${duration}ms)`, {
-                    success: !!client,
-                    hasCredentials,
-                    hasAccessToken,
-                    hasRefreshToken,
-                    tokenType: client?.credentials?.token_type || 'none'
-                });
-                
-                return client;
-            } catch (authError) {
-                // Enhanced error handling with diagnostics
-                const errorMessage = authError instanceof Error ? authError.message : String(authError);
-                const duration = Date.now() - startTime;
-                
-                console.error(`[GoogleDriveService:getUserAuthClient][${authId}] getUserGoogleAuthClient failed (took ${duration}ms)`, {
-                    errorMessage,
-                    errorType: authError instanceof Error ? authError.name : 'Unknown',
-                    stack: authError instanceof Error ? authError.stack?.substring(0, 500) : null
-                });
-                
-                // Check for specific error types to provide better error messages
-                const needsReconnect = errorMessage.includes('reconnect') || 
-                                      errorMessage.includes('No Google access token');
-                
-                if (needsReconnect) {
-                    this.logOperation('error', `[${authId}] User needs to reconnect Google account`, {
-                        userId,
-                        action: 'reconnect_required',
-                        originalError: errorMessage
-                    });
-                } else {
-                    this.logOperation('error', `[${authId}] Google Auth client creation failed: ${errorMessage}`, {
-                        userId,
-                        error: authError,
-                        stack: authError instanceof Error ? authError.stack : null
-                    });
-                }
-                
-                // Rethrow to allow the caller to handle it
-                throw authError;
-            }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            
-            console.error(`[GoogleDriveService:getUserAuthClient][${authId}] Failed to get OAuth client:`, {
-                errorMessage,
-                errorType: error instanceof Error ? error.name : 'UnknownError',
-                stack: error instanceof Error ? error.stack?.substring(0, 500) : null
-            });
-            
-            this.logOperation('error', `[${authId}] Failed to get OAuth client: ${errorMessage}`, {
-                userId,
-                errorType: error instanceof Error ? error.name : 'UnknownError',
-                stack: error instanceof Error ? error.stack : null,
-                isTokenIssue: errorMessage.includes('token') || errorMessage.includes('OAuth') || errorMessage.includes('auth')
-            });
-            
-            return null;
         }
     }
 }
