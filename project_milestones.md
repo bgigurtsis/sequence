@@ -1,118 +1,194 @@
-Here’s a suggested multi-phase plan that you (and Cursor) can follow to systematically implement the recommendations. Each phase focuses on a subset of improvements, with logical dependencies in mind (so that early changes provide a stable foundation for later ones).
+Phase 1: Simplify Client-Side Authentication & Session Handling
+Goal: Establish a single, reliable source of truth for client-side authentication state, remove global function dependencies, and streamline validation logic.
 
----
+Tasks:
 
-## Phase 1: Centralize and Simplify Google OAuth Logic
+Implement Central Auth Hook:
 
-1. **Create a dedicated “Google OAuth Manager” utility**  
-   - Consolidate all token retrieval and refresh code into a single file (e.g. `lib/googleOAuthManager.ts`).
-   - Move logic scattered in `lib/clerkTokenManager.ts`, `lib/googleAuth.ts`, and your route handlers (`auth/google-token`, `auth/google-reconnect`) to this single utility.
-   - Expose high-level methods such as:
-     - `getOrRefreshGoogleToken(userId: string): Promise<string>`  
-     - `disconnectGoogle(userId: string): Promise<void>`  
-     - `generateAuthUrl(sessionId: string, userId: string, reconnect?: boolean): string`  
-   - Ensure that you remove any duplicate logic around generating OAuth URLs or refreshing tokens.
+Create a new hook, e.g., useAuthStatus.
 
-2. **Refactor References to the New Utility**  
-   - Update your route handlers (e.g. `app/api/auth/google-token/route.ts`, `app/api-handlers/auth.ts`, etc.) to call this central utility instead of re-implementing token logic.
-   - Remove or deprecate the leftover code in `lib/clerkTokenManager.ts` and `lib/googleAuth.ts` that now duplicates the new utility.
+Leverage Clerk's useAuth() hook (isLoaded, isSignedIn, userId, sessionId).
 
-3. **Validate the Flow**  
-   - Thoroughly test sign-in/out flows, token refresh flows, reconnection flows, and error handling (e.g., revoked tokens).
+If still deemed necessary after evaluating Clerk's capabilities: Add logic for periodic background checks using /api/auth/me or /api/auth/refresh-session (simplify the endpoint if possible) but avoid complex timers tied to visibilitychange. Keep it simple (e.g., check every 5-15 minutes).
 
-**Outcome**: A single, consistent code path for everything Google OAuth–related.
+Consolidate logic from lib/sessionUtils.ts into this hook if relevant.
 
----
+Remove Redundant Components/Utils:
 
-## Phase 2: Combine `googleDriveService` and `GoogleDriveServerService`
+Delete app/components/SessionRefresh.tsx.
 
-1. **Review Both Services**  
-   - Look at `GoogleDriveServerService` (e.g. `listFiles`, `uploadFile`) and `googleDriveService` to identify the overlaps.  
-   - Document what’s truly unique in each (if anything).
+Delete components/AuthCheck.tsx.
 
-2. **Merge and Rename**  
-   - Create a single `GoogleDriveService` that handles all logic.  
-   - Decide whether you need separate client vs. server “entry points.” For Next.js 13, typically only the server side should call the real Google API. If you need a client-friendly version, you might wrap server calls with a simple fetch function in the client.
+Delete components/ValidationRegistration.tsx.
 
-3. **Update Call Sites**  
-   - Search your codebase for references to both services and systematically replace them with the new, unified `GoogleDriveService`.
-   - Remove leftover or unused methods once everything is unified.
+Delete or significantly simplify lib/sessionUtils.ts.
 
-4. **Test**  
-   - Confirm that listing, uploading, deleting, etc. still work as expected with the single merged service.
+Eliminate Global Dependencies:
 
-**Outcome**: A single, clear class or module for all Google Drive operations, drastically reducing confusion about which service to import.
+Search for all usages of window.validateAllTokensForRecording, window.refreshBeforeCriticalOperation, window.refreshSessionBeforeAction.
 
----
+Replace these calls with logic using the new useAuthStatus hook or directly using Clerk's useAuth.
 
-## Phase 3: Break Up or Simplify the `[...slug]/route.ts`
+Update components like VideoRecorder and contexts/PerformanceContext (or code calling its actions) to use the new hook for pre-action validation.
 
-1. **Choose a Route Organization Strategy**  
-   - **Option A**: Keep `[...slug]` but make it smaller by pulling out the route definitions into separate files. Then import them into `[...slug]/route.ts`.  
-   - **Option B**: Migrate to more conventional Next.js 13 approach, e.g. `api/auth/[method]/route.ts`, `api/upload/route.ts`, etc. to avoid the dynamic dispatch.
+Standardize 401 Handling:
 
-2. **Refactor**  
-   - If you choose Option A, create new files or subdirectories that contain the logic for “auth” routes, “upload” routes, “delete” routes, etc.  
-   - If you choose Option B, systematically move each route definition into its own file structure, removing the big `routes` object from `[...slug]/route.ts`.
+Review lib/fetchWithAuth.ts. Ensure it consistently handles 401s by redirecting to /sign-in (or displaying a message/modal).
 
-3. **Adjust Imports and Testing**  
-   - Make sure anywhere you called `fetch('/api/auth/session')` (or similar) still points to the correct route.  
-   - Re-run your entire test suite or do some manual QA to confirm each endpoint still works.
+Consider implementing a global fetch interceptor if more complex handling (like automatic token refresh attempts before redirecting) is desired, but prioritize simplicity first.
 
-4. **Remove Unused Code**  
-   - Once everything is separated, remove any leftover references or old code paths in `[...slug]/route.ts`.
+Simplify syncService Authentication:
 
-**Outcome**: A more discoverable, maintainable route structure that doesn’t require searching through a giant “catch-all” file.
+Remove the validateAuthForUpload method from services/syncService.ts.
 
----
+Modify the syncService.sync() method to assume authentication is valid when called or fail gracefully if the underlying API call returns 401. The responsibility of ensuring auth before calling sync() should lie elsewhere (e.g., in the component triggering the sync).
 
-## Phase 4: Introduce Shared Helpers & Improve Logging
+Verification:
 
-1. **Create a Shared Auth Check Helper**  
-   - For instance, `requireAuth()` in `lib/server/` that returns the `userId` or throws/returns a `NextResponse.json(401)` if not authenticated.  
-   - Update all server routes to use this function instead of duplicating `const { userId } = auth(); if (!userId) ...`.
+Sign-in, sign-out, recording, and upload flows work correctly.
 
-2. **Streamline Logging**  
-   - Replace your many repeated “timestamp + environment check + request ID” blocks with a single logging utility, e.g. `log(level, message, data)`.  
-   - Have that utility handle environment-based filtering (less verbose in production, full logs in development).
+No errors related to missing window functions.
 
-3. **Adopt a Consistent Logging Format**  
-   - For example, `[timestamp][module][level] message`.  
-   - Optionally, standardize JSON logs if that suits your environment.
+401 errors from API calls consistently lead to sign-in redirection or clear user feedback.
 
-4. **Review & Remove Excess Verbosity**  
-   - If some logs are purely for debugging token issues, consider toggling them with a debug flag or removing them once you confirm reliability.
+syncService attempts uploads only when the user is likely authenticated.
 
-**Outcome**: More concise, consistent code thanks to shared helper functions and a refined logging approach.
+Removed components/utils are no longer referenced.
 
----
+Outcome: A drastically simplified, React-idiomatic approach to client-side authentication state and validation, removing brittle global dependencies.
 
-## Phase 5: Final Polish & Testing
+Phase 2: Complete Centralization & Consistency
+Goal: Ensure all OAuth logic resides in googleOAuthManager and all Drive API calls go through GoogleDriveService.
 
-1. **Review and Fix Any Gaps**  
-   - Double-check any leftover references to old services, routes, or partial OAuth logic.  
-   - Confirm each new route or utility has adequate error handling and test coverage.
+Tasks:
 
-2. **Performance and Load Testing**  
-   - With more centralized code, confirm your main flows can handle typical production loads.  
-   - If the big logging or big route architecture is still a bottleneck, consider further tweaks.
+Move Remaining OAuth Functions:
 
-3. **Documentation**  
-   - Update `README.md`, `documentation.md`, or any relevant internal docs to reflect the new structure (e.g., “To implement OAuth, see `googleOAuthManager.ts`,” “To call Google Drive, see the unified `GoogleDriveService`,” etc.).
+Relocate generateAuthUrl and exchangeCodeForTokens methods from lib/GoogleDriveService.ts to lib/googleOAuthManager.ts.
 
-5. **Delete useless files**  
-    - Based on ALL previous phases, find and delete any unneeded files for this new setup.
+Update any callers (e.g., API routes, GoogleDriveContext) to use the functions from googleOAuthManager.
 
----
+Refactor Delete Handler:
 
-## Summary
+Modify app/api-handlers/delete.ts to import and use googleDriveService.deleteFile (or equivalent method if naming differs) instead of directly using googleapis and getUserGoogleAuthClient.
 
-By tackling the recommendations in a phased approach, you minimize disruption and ensure each step is stable before moving on. After Phase 4 (and a final pass in Phase 5), you’ll have:
+Ensure googleDriveService has a robust deleteFile method that handles different resource types (performance, rehearsal, recording) or create specific methods if needed.
 
-- **One** clear place for Google OAuth logic.
-- **One** unified service for Google Drive operations.
-- **A** clearer route structure (less monolithic, easier to read).
-- **Shared** helpers (no more re-implementing `auth()` checks).
-- **Streamlined** logging (less noise, consistent format).
+Verification:
 
-This will result in a more maintainable codebase that’s easier to extend and debug in the future.
+Google connection flow (initial connect, reconnect) still functions correctly.
+
+Deleting performances, rehearsals, and recordings works correctly via the /api/delete endpoint.
+
+GoogleDriveService no longer contains core OAuth URL generation or code exchange logic.
+
+delete.ts handler no longer directly imports googleapis.
+
+Outcome: Fully centralized OAuth logic and consistent use of the GoogleDriveService abstraction for all Drive operations.
+
+Phase 3: Refactor PerformanceContext
+Goal: Reduce the size and complexity of PerformanceContext for better maintainability and potential performance improvements.
+
+Tasks:
+
+Analyze Context Contents: Identify distinct areas of responsibility within PerformanceContext (e.g., core performance/rehearsal/recording data, UI state like modal visibility, editing state, search state).
+
+Choose Refactoring Strategy:
+
+Option A (Multiple Contexts): Create smaller contexts like PerformanceDataContext, UIStateContext, ModalContext, EditStateContext.
+
+Option B (State Library): Introduce a lightweight state management library like Zustand or Jotai and create corresponding stores/atoms.
+
+Implement Chosen Strategy:
+
+Define the new contexts/stores/atoms.
+
+Migrate state variables (useState) and related actions/logic from PerformanceContext to the new structures.
+
+Keep the PerformanceDataProvider potentially thin, mainly for initializing and providing the new contexts/stores.
+
+Update Consumers:
+
+Refactor components currently using usePerformances() (like app/page.tsx, TodaysRecordings, PerformanceSelector, etc.) to consume state and actions from the new, more focused contexts/hooks/stores.
+
+Verification:
+
+All application features related to performances, rehearsals, recordings, modals, and editing still function correctly.
+
+The original PerformanceContext file is significantly smaller or broken into multiple files.
+
+Consuming components import from the new contexts/hooks/stores.
+
+Outcome: More modular and manageable application state, reduced provider complexity, potentially improved performance due to more granular updates.
+
+Phase 4: API and UI Route Cleanup
+Goal: Eliminate redundant API endpoints and confusing UI routes related to authentication.
+
+Tasks:
+
+Analyze API Endpoint Usage:
+
+Trace calls to /api/auth/google-token, /api/upload, /api/drive/upload.
+
+Determine if they are still necessary or if their functionality is covered by /api/upload/form and internal token management.
+
+Remove/Merge Redundant APIs:
+
+Delete the route files and corresponding handlers for any confirmed redundant endpoints.
+
+If /api/upload or /api/drive/upload have unique logic needed, merge it into /api/upload/form or its handler.
+
+Remove Placeholder API: Delete app/api/auth/session/route.ts.
+
+Consolidate Sign-in UI:
+
+Delete the entire app/signin/ directory.
+
+Ensure all links, redirects, and Clerk configuration (signInUrl, signUpUrl in components and middleware.ts) point consistently to /sign-in and /sign-up.
+
+Remove Login Redirect:
+
+Delete the app/login/ directory.
+
+If redirection from /login to /sign-in is strictly necessary (e.g., for existing links), configure a permanent redirect in next.config.js.
+
+Cleanup API Handlers: Review app/api-handlers/auth.ts and others – remove any functions that are no longer called by any active API route after the refactoring in previous phases.
+
+Verification:
+
+Application builds and runs without errors related to removed routes.
+
+Sign-in/sign-up flows work correctly using only the /sign-in and /sign-up paths.
+
+File uploads work correctly via the designated endpoint (likely /api/upload/form).
+
+No 404 errors for previously existing but now removed redundant routes.
+
+Outcome: A leaner API surface, a single clear authentication UI flow, and reduced codebase clutter.
+
+Phase 5: Final Testing, Documentation & Polish
+Goal: Ensure application stability after all changes and update documentation to reflect the final architecture.
+
+Tasks:
+
+Sign-up, Sign-in (Google and potentially email/password).
+
+Connecting/Disconnecting Google Drive.
+
+Creating/Editing/Deleting Performances & Rehearsals.
+
+Recording/Uploading/Linking videos.
+
+Playing back videos.
+
+Using search/filter features.
+
+Offline recording and subsequent sync.
+
+Session expiration and re-authentication during critical actions (like upload).
+
+Update Documentation:
+
+Revise documentation.md and README.md to accurately describe the simplified client-side auth mechanism, the final context structure, the unified GoogleDriveService, the fully centralized googleOAuthManager, and the cleaned-up API/UI routes.
+
+Code Review & Cleanup: Perform a final pass to catch any remaining inconsistencies, dead code, or areas needing minor improvements (linting, formatting).

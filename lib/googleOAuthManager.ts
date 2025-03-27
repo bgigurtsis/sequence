@@ -451,29 +451,86 @@ export async function disconnectGoogle(userId: string): Promise<void> {
 }
 
 /**
- * Generate a Google OAuth URL for authentication and Drive access
- * @param sessionId - The current session ID
- * @param userId - The user's ID
- * @param reconnect - Whether this is a reconnection flow
+ * Generate an authorization URL for OAuth consent screen
+ * 
+ * @param sessionId - Optional sessionId for Clerk OAuth flow
+ * @param userId - Optional userId for Clerk OAuth flow
+ * @param reconnect - Whether this is a reconnect operation for Clerk OAuth
+ * @param useClerkOAuth - Whether to use Clerk's built-in OAuth flow (if true) or direct Google OAuth (if false)
+ * @returns URL for OAuth consent screen
  */
-export function generateAuthUrl(sessionId: string, userId: string, reconnect: boolean = false): string {
+export function generateAuthUrl(
+  sessionId?: string, 
+  userId?: string, 
+  reconnect: boolean = false,
+  useClerkOAuth: boolean = true
+): string {
   try {
-    logWithTimestamp('OAuth', 'generateUrl', `Generating OAuth URL for user ${userId}`, { reconnect });
+    // If using Clerk's OAuth system and sessionId & userId are provided
+    if (useClerkOAuth && sessionId && userId) {
+      logWithTimestamp('OAuth', 'generateUrl', `Generating Clerk OAuth URL for user ${userId}`, { reconnect });
+      
+      // For Clerk's OAuth system, we redirect to their built-in connect account page
+      const baseUrl = '/user/connect-account';
+      const params = new URLSearchParams({
+        provider: 'oauth_google',
+        force: reconnect ? 'true' : 'false',
+      });
+      
+      const authUrl = `${baseUrl}?${params.toString()}`;
+      
+      logWithTimestamp('OAuth', 'generateUrl', `Generated Clerk OAuth URL: ${authUrl}`);
+      return authUrl;
+    }
     
-    // For Clerk's OAuth system, we redirect to their built-in connect account page
-    const baseUrl = '/user/connect-account';
-    const params = new URLSearchParams({
-      provider: 'oauth_google',
-      force: reconnect ? 'true' : 'false',
+    // If using direct Google OAuth
+    logWithTimestamp('OAuth', 'generateAuthUrl', 'Generating direct Google Auth URL');
+
+    const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+    const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+    const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
+
+    if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+      const missingVars = [
+        !CLIENT_ID ? 'CLIENT_ID' : null,
+        !CLIENT_SECRET ? 'CLIENT_SECRET' : null,
+        !REDIRECT_URI ? 'REDIRECT_URI' : null
+      ].filter(Boolean);
+      
+      logWithTimestamp('OAuth', 'ERROR', 'Missing Google OAuth credentials in environment variables', { missingVars });
+      throw new Error('Missing Google OAuth credentials in environment variables');
+    }
+
+    const oauth2Client = new OAuth2Client(
+      CLIENT_ID,
+      CLIENT_SECRET,
+      REDIRECT_URI
+    );
+
+    // Define the scopes we need
+    const scopes = [
+      'https://www.googleapis.com/auth/userinfo.profile',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive.metadata.readonly'
+    ];
+
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: scopes,
+      prompt: 'consent' // Force to always display consent screen to get refresh token
+    });
+
+    logWithTimestamp('OAuth', 'generateAuthUrl', 'Generated direct Google Auth URL', { 
+      urlLength: url.length,
+      urlStart: url.substring(0, 30) + '...'
     });
     
-    const authUrl = `${baseUrl}?${params.toString()}`;
-    
-    logWithTimestamp('OAuth', 'generateUrl', `Generated OAuth URL: ${authUrl}`);
-    return authUrl;
+    return url;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logWithTimestamp('OAuth', 'ERROR', `Error generating OAuth URL for user ${userId}`, { error: errorMessage });
+    const userIdInfo = userId ? `for user ${userId}` : '';
+    logWithTimestamp('OAuth', 'ERROR', `Error generating OAuth URL ${userIdInfo}`, { error: errorMessage });
     throw new Error(`Failed to generate Google OAuth URL: ${errorMessage}`);
   }
 }
@@ -526,6 +583,55 @@ export async function getUserInfo(accessToken: string) {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logWithTimestamp('OAuth', 'ERROR', `Error getting user info from Google`, { error: errorMessage });
+    throw error;
+  }
+}
+
+/**
+ * Exchange authorization code for tokens
+ * @param code - Authorization code from OAuth consent
+ * @returns Tokens object containing access_token and refresh_token
+ */
+export async function exchangeCodeForTokens(code: string) {
+  try {
+    logWithTimestamp('OAuth', 'exchangeCode', 'Exchanging code for tokens', { 
+      codeLength: code ? code.length : 0,
+      codeStart: code ? code.substring(0, 10) + '...' : null 
+    });
+
+    const CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+    const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+    const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
+
+    if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+      const missingVars = [
+        !CLIENT_ID ? 'CLIENT_ID' : null,
+        !CLIENT_SECRET ? 'CLIENT_SECRET' : null,
+        !REDIRECT_URI ? 'REDIRECT_URI' : null
+      ].filter(Boolean);
+      
+      logWithTimestamp('OAuth', 'ERROR', 'Missing Google OAuth credentials in environment variables', { missingVars });
+      throw new Error('Missing Google OAuth credentials in environment variables');
+    }
+
+    const oauth2Client = new OAuth2Client(
+      CLIENT_ID,
+      CLIENT_SECRET,
+      REDIRECT_URI
+    );
+    
+    // Using getToken to exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    logWithTimestamp('OAuth', 'exchangeCode', 'Successfully exchanged code for tokens', {
+      tokenType: tokens.token_type,
+      scopes: tokens.scope?.split(' '),
+      expiresIn: tokens.expiry_date ? Math.floor((tokens.expiry_date - Date.now()) / 1000) : 'unknown'
+    });
+    
+    return tokens;
+  } catch (error) {
+    logWithTimestamp('OAuth', 'ERROR', `Failed to exchange code for tokens: ${(error as Error).message}`, error);
     throw error;
   }
 } 

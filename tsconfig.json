@@ -36,6 +36,12 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "app/api/auth/session",
+    "app/api/auth/google-token",
+    "app/api/drive/upload",
+    "app/api/upload/route.ts",
+    "app/login",
+    "app/signin"
   ]
 }

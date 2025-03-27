@@ -2,13 +2,12 @@
 
 import { ClerkProvider } from '@clerk/nextjs';
 import { GoogleDriveProvider } from '@/contexts/GoogleDriveContext';
-import ValidationRegistration from '@/components/ValidationRegistration';
 import Navigation from '@/components/Navigation';
 import AuthenticationGuard from '@/components/AuthenticationGuard';
 import { usePathname } from 'next/navigation';
 
 // Define public routes that don't require authentication
-const PUBLIC_PATHS = ['/', '/sign-in', '/sign-up', '/login', '/signin'];
+const PUBLIC_PATHS = ['/', '/sign-in', '/sign-up'];
 
 export default function ClientProviders({ 
   children 
@@ -39,7 +38,6 @@ export default function ClientProviders({
           }
         >
           <GoogleDriveProvider>
-            <ValidationRegistration />
             <Navigation />
             {children}
           </GoogleDriveProvider>

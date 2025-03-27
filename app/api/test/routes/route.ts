@@ -11,32 +11,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const requestId = generateRequestId('GET', 'test/routes');
     log('test', 'info', 'GET /api/test/routes called', { requestId, url: request.url });
     
-    // List of all API routes
-    const routes = {
-        auth: [
-            { method: 'GET', path: '/api/auth/me', description: 'Get current user info' },
-            { method: 'GET', path: '/api/auth/google-status', description: 'Check Google connection status' },
-            { method: 'GET', path: '/api/auth/google-auth-url', description: 'Generate Google auth URL' },
-            { method: 'POST', path: '/api/auth/google-disconnect', description: 'Disconnect Google account' },
-            { method: 'POST', path: '/api/auth/session', description: 'Create a new session' },
-            { method: 'GET', path: '/api/auth/refresh-session', description: 'Refresh session' },
-            { method: 'GET', path: '/api/auth/user', description: 'Get user details' },
-            { method: 'POST', path: '/api/auth/logout', description: 'Logout user' }
-        ],
-        upload: [
-            { method: 'POST', path: '/api/upload', description: 'Upload a file' },
-            { method: 'POST', path: '/api/upload/form', description: 'Upload a file with form data' },
-        ],
-        delete: [
-            { method: 'DELETE', path: '/api/delete', description: 'Delete an item' }
-        ],
-        drive: [
-            { method: 'POST', path: '/api/drive/upload', description: 'Upload a file to Google Drive' }
-        ],
-        test: [
-            { method: 'GET', path: '/api/test/routes', description: 'List available API routes' }
-        ]
-    };
+    // Define all API routes for documentation and testing purposes
+    const routes = [
+        // Authentication routes
+        { method: 'GET', path: '/api/auth/google-status', description: 'Check Google OAuth connection status' },
+        { method: 'GET', path: '/api/auth/google-auth-url', description: 'Get a Google OAuth URL for authentication' },
+        { method: 'GET', path: '/api/auth/refresh-session', description: 'Refresh the current session' },
+        { method: 'GET', path: '/api/auth/google-reconnect', description: 'Get a URL to reconnect Google OAuth' },
+        
+        // Upload routes
+        { method: 'POST', path: '/api/upload/form', description: 'Upload a file to Google Drive with form data' },
+        
+        // Other routes
+        { method: 'GET', path: '/api/test/routes', description: 'Get a list of all API routes (this endpoint)' },
+    ];
     
     // Build HTML for a prettier response in browser
     const html = `
@@ -63,21 +51,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         <h1>API Routes Test</h1>
         <p>The following API routes are available for testing:</p>
         
-        ${Object.entries(routes).map(([category, endpoints]) => `
-            <h2>${category.toUpperCase()} Endpoints</h2>
+        ${routes.map((endpoint, index) => `
+            <h2>Route ${index + 1}</h2>
             <table>
                 <tr>
                     <th>Method</th>
                     <th>Path</th>
                     <th>Description</th>
                 </tr>
-                ${endpoints.map(endpoint => `
-                    <tr>
-                        <td class="method ${endpoint.method.toLowerCase()}">${endpoint.method}</td>
-                        <td class="path">${endpoint.path}</td>
-                        <td>${endpoint.description}</td>
-                    </tr>
-                `).join('')}
+                <tr>
+                    <td class="method ${endpoint.method.toLowerCase()}">${endpoint.method}</td>
+                    <td class="path">${endpoint.path}</td>
+                    <td>${endpoint.description}</td>
+                </tr>
             </table>
         `).join('')}
     </body>

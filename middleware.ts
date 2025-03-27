@@ -184,7 +184,7 @@ export default clerkMiddleware((auth, req) => {
   }
 
   // Special handling for critical API operations
-  if (req.method === 'POST' && path.includes('/api/upload')) {
+  if (req.method === 'POST' && path.includes('/api/upload/form')) {
     logWithTimestamp('API', `Processing critical upload request`, {
       requestId,
       hasAuth: !!userId,
@@ -192,7 +192,7 @@ export default clerkMiddleware((auth, req) => {
       path
     });
     
-    // For upload requests, ensure we don't block them with middleware
+    // For upload requests to the consolidated endpoint, ensure we don't block them with middleware
     // The handler itself will validate authentication
     return NextResponse.next();
   }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
-import { validateAllTokensWithRetry } from '@/lib/sessionUtils';
+import { useAuthStatus } from '@/hooks/useAuthStatus';
 
 interface PreRecordingValidationProps {
   onValidationComplete: (isValid: boolean) => void;
@@ -15,6 +15,9 @@ const PreRecordingValidation: React.FC<PreRecordingValidationProps> = ({
 }) => {
   const [validationStatus, setValidationStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const [error, setError] = useState<string | null>(null);
+  
+  // Use our new auth hook
+  const { validateAuth } = useAuthStatus();
 
   // Run validation on component mount
   useEffect(() => {
@@ -23,8 +26,8 @@ const PreRecordingValidation: React.FC<PreRecordingValidationProps> = ({
       setError(null);
       
       try {
-        // Use our global validation function with retries
-        const isValid = await validateAllTokensWithRetry(3);
+        // Use our new validateAuth function
+        const isValid = await validateAuth(true);
         
         if (isValid) {
           setValidationStatus('valid');
@@ -43,7 +46,7 @@ const PreRecordingValidation: React.FC<PreRecordingValidationProps> = ({
     };
     
     validateSession();
-  }, [onValidationComplete]);
+  }, [onValidationComplete, validateAuth]);
   
   // Manual retry function
   const handleRetry = async () => {
@@ -51,8 +54,8 @@ const PreRecordingValidation: React.FC<PreRecordingValidationProps> = ({
     setError(null);
     
     try {
-      // Use our global validation function with retries
-      const isValid = await validateAllTokensWithRetry(3);
+      // Use our new validateAuth function
+      const isValid = await validateAuth(true);
       
       if (isValid) {
         setValidationStatus('valid');

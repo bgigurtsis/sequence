@@ -1,7 +1,6 @@
 'use client';
 
 import { SignedIn, SignedOut, UserButton } from '@clerk/nextjs';
-import { AuthCheck } from '@/components/AuthCheck';   
 import { SyncIndicator } from '@/components/SyncIndicator';
 
 export default function Navigation() {
@@ -13,7 +12,6 @@ export default function Navigation() {
           <a href="/" className="hover:underline">Home</a>
           <a href="/settings" className="hover:underline">Settings</a>
           <SignedIn>
-            <AuthCheck />
             <SyncIndicator />
             <UserButton afterSignOutUrl="/" />
           </SignedIn>

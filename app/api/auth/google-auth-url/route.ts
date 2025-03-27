@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { log, generateRequestId } from '@/lib/logging';
 import { requireAuth } from '@/lib/server/auth';
 import { withErrorHandling } from '@/lib/server/apiUtils';
-import { googleDriveService } from '@/lib/GoogleDriveService';
+import { generateAuthUrl } from '@/lib/googleOAuthManager';
 
 /**
  * GET /api/auth/google-auth-url - Generate Google OAuth URL
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         
         try {
             // Generate the OAuth URL
-            const authUrl = googleDriveService.generateAuthUrl();
+            const authUrl = generateAuthUrl();
             
             // Add state parameter to the URL
             const urlWithState = `${authUrl}&state=${encodeURIComponent(state)}`;

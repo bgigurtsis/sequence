@@ -1,7 +1,11 @@
 // lib/GoogleDriveService.ts
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
-import { getUserGoogleAuthClient } from './googleOAuthManager';
+import { 
+    getUserGoogleAuthClient, 
+    generateAuthUrl, 
+    exchangeCodeForTokens 
+} from './googleOAuthManager';
 import { clerkClient } from '@clerk/nextjs/server';
 
 // Types
@@ -58,9 +62,6 @@ interface GoogleDriveFile {
  */
 export class GoogleDriveService {
     private readonly ROOT_FOLDER_NAME = 'StageVault Recordings';
-    private readonly CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-    private readonly CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-    private readonly REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
 
     /**
      * Check if the Google Drive connection is working
@@ -163,99 +164,11 @@ export class GoogleDriveService {
     }
 
     /**
-     * Generate an authorization URL for OAuth consent screen
-     * @returns URL for OAuth consent screen
-     */
-    generateAuthUrl(): string {
-        try {
-            this.logOperation('start', 'Generating Google Auth URL');
-
-            if (!this.CLIENT_ID || !this.CLIENT_SECRET || !this.REDIRECT_URI) {
-                const missingVars = [
-                    !this.CLIENT_ID ? 'CLIENT_ID' : null,
-                    !this.CLIENT_SECRET ? 'CLIENT_SECRET' : null,
-                    !this.REDIRECT_URI ? 'REDIRECT_URI' : null
-                ].filter(Boolean);
-                
-                this.logOperation('error', 'Missing Google OAuth credentials in environment variables', { missingVars });
-                throw new Error('Missing Google OAuth credentials in environment variables');
-            }
-
-            const oauth2Client = this.createOAuth2Client();
-
-            // Define the scopes we need
-            const scopes = [
-                'https://www.googleapis.com/auth/userinfo.profile',
-                'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/drive.file',
-                'https://www.googleapis.com/auth/drive.metadata.readonly'
-            ];
-
-            const url = oauth2Client.generateAuthUrl({
-                access_type: 'offline',
-                scope: scopes,
-                prompt: 'consent' // Force to always display consent screen to get refresh token
-            });
-
-            this.logOperation('success', 'Generated Google Auth URL', { 
-                urlLength: url.length,
-                urlStart: url.substring(0, 30) + '...'
-            });
-            return url;
-        } catch (error) {
-            this.logOperation('error', `Failed to generate auth URL: ${(error as Error).message}`, error);
-            throw error;
-        }
-    }
-
-    /**
-     * Exchange authorization code for tokens
-     * @param code - Authorization code from OAuth consent
-     * @returns Tokens object containing access_token and refresh_token
-     */
-    async exchangeCodeForTokens(code: string) {
-        try {
-            this.logOperation('start', 'Exchanging code for tokens', { 
-                codeLength: code ? code.length : 0,
-                codeStart: code ? code.substring(0, 10) + '...' : null 
-            });
-
-            if (!this.CLIENT_ID || !this.CLIENT_SECRET || !this.REDIRECT_URI) {
-                const missingVars = [
-                    !this.CLIENT_ID ? 'CLIENT_ID' : null,
-                    !this.CLIENT_SECRET ? 'CLIENT_SECRET' : null,
-                    !this.REDIRECT_URI ? 'REDIRECT_URI' : null
-                ].filter(Boolean);
-                
-                this.logOperation('error', 'Missing Google OAuth credentials in environment variables', { missingVars });
-                throw new Error('Missing Google OAuth credentials in environment variables');
-            }
-
-            const oauth2Client = this.createOAuth2Client();
-            
-            // Using getToken to exchange code for tokens
-            const { tokens } = await oauth2Client.getToken(code);
-            
-            this.logOperation('success', 'Successfully exchanged code for tokens', {
-                tokenType: tokens.token_type,
-                scopes: tokens.scope?.split(' '),
-                expiresIn: tokens.expiry_date ? Math.floor((tokens.expiry_date - Date.now()) / 1000) : 'unknown'
-            });
-            
-            return tokens;
-        } catch (error) {
-            this.logOperation('error', `Failed to exchange code for tokens: ${(error as Error).message}`, error);
-            throw error;
-        }
-    }
-
-    /**
-     * Creates a folder in Google Drive
-     * 
-     * @param userId The Clerk user ID
-     * @param name The name of the folder to create
-     * @param parentId Optional parent folder ID
-     * @returns The created folder object
+     * Create a folder in Google Drive
+     * @param userId - The user's ID
+     * @param name - The name of the folder
+     * @param parentId - The ID of the parent folder (optional)
+     * @returns The created folder
      */
     async createFolder(
         userId: string,
@@ -533,18 +446,6 @@ export class GoogleDriveService {
     }
 
     // PRIVATE METHODS
-
-    /**
-     * Create an OAuth2 client with configured credentials
-     * @returns Configured OAuth2Client
-     */
-    private createOAuth2Client(): OAuth2Client {
-        return new google.auth.OAuth2(
-            this.CLIENT_ID,
-            this.CLIENT_SECRET,
-            this.REDIRECT_URI
-        );
-    }
 
     /**
      * Upload a file to a specific folder using fetch API (for binary uploads)

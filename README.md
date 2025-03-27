@@ -51,9 +51,14 @@ If you're experiencing issues with Google Drive synchronization:
 
 - `/app` - Next.js App Router pages and API routes
 - `/components` - React components
-- `/contexts` - React context providers
+- `/contexts` - React context providers:
+  - `/contexts/PerformanceDataContext.tsx` - Core data management
+  - `/contexts/UIStateContext.tsx` - UI state management
+  - `/contexts/ModalContext.tsx` - Modal visibility control
+  - `/contexts/EditStateContext.tsx` - Editing state management  
+  - `/contexts/PerformanceContext.tsx` - Thin wrapper combining the above contexts
 - `/lib` - Utility functions and helpers
-  - `/lib/googleOAuthManager.ts` - Centralized Google OAuth utilities
+  - `/lib/googleOAuthManager.ts` - Fully centralized Google OAuth utilities
   - `/lib/GoogleDriveService.ts` - Unified Google Drive operations for both client and server
 - `/services` - Client-side services like sync and storage
 - `/types` - TypeScript type definitions
@@ -63,10 +68,20 @@ If you're experiencing issues with Google Drive synchronization:
 ### Key Components
 
 - **Authentication**: Uses Clerk for authentication and session management
+  - Client-side authentication with the `useAuthStatus` hook following React best practices
   - Shared authentication utilities in `lib/server/auth.ts` provide consistent auth checks and session handling
-  - Centralized Google OAuth operations in `lib/googleOAuthManager.ts`
+  - Fully centralized Google OAuth operations in `lib/googleOAuthManager.ts`
+  - Consistent authorization flow with streamlined UI routes (/sign-in, /sign-up)
+
+- **State Management**: Modular context structure for improved maintainability
+  - `PerformanceDataContext` - Core data management
+  - `UIStateContext` - UI state (search, selected performance, filters)
+  - `ModalContext` - Modal visibility control
+  - `EditStateContext` - Editing state for performances, rehearsals, recordings
+  - `PerformanceContext` - Thin wrapper maintaining backward compatibility
 
 - **API Routes**: Next.js App Router API routes organized by feature area
+  - Consolidated endpoints with redundant routes removed
   - Common error handling with `withErrorHandling()` wrapper from `lib/server/apiUtils.ts`
   - Consistent logging with `log()` function from `lib/logging.ts`
   - Request tracking with unique request IDs
@@ -75,10 +90,7 @@ If you're experiencing issues with Google Drive synchronization:
   - File uploads, downloads, and metadata management
   - Folder structure creation and management
   - Error handling with informative messages
-
-- **Recording**: Browser-based video recording with MediaRecorder API
-  - Direct uploading to Google Drive
-  - Background sync for offline operation
+  - All Drive API calls consistently routed through this service
 
 ### Shared Utilities
 
@@ -99,29 +111,20 @@ The application uses several shared utilities for common operations:
 
 ### API Routes
 
-The app uses Next.js App Router API routes organized by feature area:
+The app uses Next.js App Router API routes with consolidated endpoints:
 
 - **Auth API routes**:
   - `/api/auth/me` - Get current user info
   - `/api/auth/google-status` - Check Google OAuth connection status
   - `/api/auth/google-auth-url` - Generate Google Auth URL
   - `/api/auth/google-disconnect` - Disconnect Google account
-  - `/api/auth/session` - Create a new session
   - `/api/auth/refresh-session` - Refresh the session
-  - `/api/auth/user` - Get user details
-  - `/api/auth/logout` - Logout user
 
-- **Upload API routes**:
-  - `/api/upload` - Upload a file
-  - `/api/upload/form` - Upload a file with form data
+- **Upload API route**:
+  - `/api/upload/form` - Unified endpoint for file uploads with form data
 
 - **Delete API route**:
-  - `/api/delete` - Delete an item
-
-- **Google Drive API routes**:
-  - `/api/drive/upload` - Upload a file directly to Google Drive
-
-For testing and exploration, visit `/api/test/routes` to see a list of all available endpoints.
+  - `/api/delete` - Delete an item (uses GoogleDriveService)
 
 ## Features
 

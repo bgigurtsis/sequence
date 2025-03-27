@@ -93,7 +93,7 @@ export function useGoogleDrive({ onError }: UseGoogleDriveProps = {}) {
         formData.append('folderId', folderId);
       }
 
-      const response = await fetch('/api/drive/upload', {
+      const response = await fetch('/api/upload/form', {
         method: 'POST',
         body: formData,
       });
@@ -105,7 +105,12 @@ export function useGoogleDrive({ onError }: UseGoogleDriveProps = {}) {
 
       const result = await response.json();
       await fetchFiles(folderId);
-      return result.file || null;
+      return result.fileId ? {
+        id: result.fileId,
+        name: result.fileName,
+        mimeType: file.type,
+        webViewLink: result.webViewLink
+      } : null;
     } catch (error) {
       if (error instanceof Error && onError) {
         onError(error);
