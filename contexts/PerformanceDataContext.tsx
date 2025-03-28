@@ -129,42 +129,34 @@ export const PerformanceDataProvider: React.FC<{ children: ReactNode }> = ({ chi
     try {
       const performance = performances.find(p => p.id === performanceId);
       if (!performance) {
-        console.error('Cannot delete performance: Not found', performanceId);
-        throw new Error('Performance not found');
+        throw new Error(`Performance with ID ${performanceId} not found`);
       }
 
-      console.log('Deleting performance from local state:', performance.title);
+      // Delete from Google Drive via API
+      const res = await fetch('/api/delete', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          type: 'performance',
+          performanceId,
+          performanceTitle: performance.title
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error(`Failed to delete performance from Google Drive: ${res.status} ${res.statusText}`, errorText);
+        // We don't throw here because we've already updated the local state
+      } else {
+        console.log('Successfully deleted performance from Google Drive:', performance.title);
+      }
 
       // Update local state first (offline-first approach)
       const updated = performances.filter((p) => p.id !== performanceId);
       updatePerformances(updated);
-
-      // Then try to delete from Google Drive
-      try {
-        console.log('Sending delete request to Google Drive API for performance:', performance.title);
-        const res = await fetch('/api/delete', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            type: 'performance',
-            performanceId,
-            performanceTitle: performance.title
-          }),
-        });
-
-        if (!res.ok) {
-          const errorText = await res.text();
-          console.error(`Failed to delete performance from Google Drive: ${res.status} ${res.statusText}`, errorText);
-          // We don't throw here because we've already updated the local state
-        } else {
-          console.log('Successfully deleted performance from Google Drive:', performance.title);
-        }
-      } catch (driveError) {
-        console.error('Error communicating with Google Drive API:', driveError);
-        // Don't rethrow, as we've already updated local state
-      }
     } catch (error) {
       console.error('Failed to delete performance:', error);
       throw error;
@@ -208,19 +200,18 @@ export const PerformanceDataProvider: React.FC<{ children: ReactNode }> = ({ chi
   const deleteRehearsal = async (performanceId: string, rehearsalId: string) => {
     try {
       const performance = performances.find(p => p.id === performanceId);
-      if (!performance) {
-        throw new Error('Performance not found');
-      }
+      const rehearsal = performance?.rehearsals.find(r => r.id === rehearsalId);
       
-      const rehearsal = performance.rehearsals.find(r => r.id === rehearsalId);
-      if (!rehearsal) {
-        throw new Error('Rehearsal not found');
+      if (!performance || !rehearsal) {
+        throw new Error('Performance or rehearsal not found');
       }
 
+      // Delete from Google Drive via API
       const res = await fetch('/api/delete', {
         method: 'DELETE',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           type: 'rehearsal',
@@ -422,55 +413,86 @@ export const PerformanceDataProvider: React.FC<{ children: ReactNode }> = ({ chi
 
       // Update state
       setPerformances(updatedPerformances);
-
       console.log('Updated state with new recording');
 
-      // Save to storage with correct parameter structure
+      // Convert thumbnail to blob if needed
+      const thumbnailBlob = typeof thumbnail === 'string' 
+        ? await convertDataUrlToBlob(thumbnail) 
+        : thumbnail;
+
+      // DIRECT UPLOAD APPROACH - No longer using sync queue
       try {
-        const thumbnailBlob = typeof thumbnail === 'string' 
-          ? await convertDataUrlToBlob(thumbnail) 
-          : thumbnail;
+        logWithTimestamp('UPLOAD', 'Starting direct upload to Google Drive');
+
+        // Create FormData for direct upload
+        const formData = new FormData();
+        formData.append('video', videoBlob);
+        formData.append('thumbnail', thumbnailBlob);
+        formData.append('performanceId', performanceId);
+        formData.append('performanceTitle', performance.title || 'Untitled Performance');
+        formData.append('rehearsalId', rehearsalId);
+        formData.append('recordingId', newRecording.id);
         
-        await videoStorage.saveVideo(
-          newRecording.id,
-          videoBlob,
-          thumbnailBlob,
-          {
-            title: newRecording.title,
-            performanceId: performanceId,
-            rehearsalId: rehearsalId,
-            createdAt: new Date().toISOString(),
-            performers: newRecording.performers,
-            tags: newRecording.tags || [],
+        // Add metadata
+        Object.entries(mergedMetadata).forEach(([key, value]) => {
+          if (Array.isArray(value)) {
+            formData.append(key, JSON.stringify(value));
+          } else if (value !== undefined && value !== null) {
+            formData.append(key, value.toString());
           }
-        );
+        });
 
-        console.log('Saved recording to storage');
-      } catch (storageError) {
-        console.error('Error saving to storage:', storageError);
-        // Continue execution even if storage fails
-      }
+        // Make direct API call
+        const response = await fetch('/api/upload/form', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
 
-      // Queue upload to server
-      try {
-        const finalMetadata = mergedMetadata;
-        const thumbnailBlob = typeof thumbnail === 'string' 
-          ? await convertDataUrlToBlob(thumbnail) 
-          : thumbnail;
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || 'Upload failed with status: ' + response.status);
+        }
+
+        const result = await response.json();
+        logWithTimestamp('UPLOAD', 'Direct upload successful', { 
+          fileId: result.fileId,
+          thumbnailId: result.thumbnailId
+        });
+
+        // Save local copy as backup
+        try {
+          await videoStorage.saveVideo(
+            newRecording.id,
+            videoBlob,
+            thumbnailBlob,
+            {
+              title: newRecording.title,
+              performanceId: performanceId,
+              rehearsalId: rehearsalId,
+              createdAt: new Date().toISOString(),
+              performers: newRecording.performers,
+              tags: newRecording.tags || []
+            }
+          );
+          console.log('Saved recording to local storage as backup');
+        } catch (storageError) {
+          console.error('Error saving to local storage:', storageError);
+          // Continue execution even if storage fails
+        }
+      } catch (uploadError) {
+        console.error('Error with direct upload:', uploadError);
         
+        // Fall back to sync queue if direct upload fails
+        console.log('Falling back to sync queue');
         await addToSyncQueue(
           performanceId,
           performance.title || 'Untitled Performance',
           rehearsalId,
           videoBlob,
           thumbnailBlob,
-          finalMetadata
+          mergedMetadata
         );
-
-        console.log('Queued recording for sync');
-      } catch (syncError) {
-        console.error('Error queuing for sync:', syncError);
-        // Continue execution even if sync fails
       }
 
       return newRecording.id;
@@ -505,18 +527,34 @@ export const PerformanceDataProvider: React.FC<{ children: ReactNode }> = ({ chi
 
   const deleteRecording = async (performanceId: string, rehearsalId: string, recordingId: string) => {
     try {
-      const performance = performances.find(p => p.id === performanceId);
-      const rehearsal = performance?.rehearsals.find(r => r.id === rehearsalId);
-      const recording = rehearsal?.recordings.find(r => r.id === recordingId);
-
+      console.log(`Deleting recording: ${recordingId} from rehearsal: ${rehearsalId}, performance: ${performanceId}`);
+      
+      // Get references to the performance, rehearsal and recording
+      const performance = performances.find((p) => p.id === performanceId);
+      const rehearsal = performance?.rehearsals.find((r) => r.id === rehearsalId);
+      const recording = rehearsal?.recordings.find((r) => r.id === recordingId);
+      
       if (!performance || !rehearsal || !recording) {
-        throw new Error('Performance, rehearsal, or recording not found');
+        throw new Error('Recording, rehearsal or performance not found');
       }
-
+      
+      // Log what we're about to send
+      console.log('Sending delete request with payload:', {
+        type: 'recording',
+        performanceId,
+        performanceTitle: performance.title,
+        rehearsalId,
+        rehearsalTitle: rehearsal.title,
+        recordingId,
+        recordingTitle: recording.title
+      });
+      
+      // Delete from Google Drive via API
       const res = await fetch('/api/delete', {
         method: 'DELETE',
+        credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           type: 'recording',
@@ -529,6 +567,17 @@ export const PerformanceDataProvider: React.FC<{ children: ReactNode }> = ({ chi
         }),
       });
 
+      // Log the response details
+      console.log('Delete API response:', {
+        status: res.status,
+        statusText: res.statusText,
+        ok: res.ok,
+        headers: Array.from(res.headers).reduce((obj, [key, value]) => {
+          obj[key] = value;
+          return obj;
+        }, {} as Record<string, string>)
+      });
+      
       if (!res.ok) {
         throw new Error(`Failed to delete from Google Drive: ${res.statusText}`);
       }

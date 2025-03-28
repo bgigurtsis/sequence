@@ -363,14 +363,31 @@ export async function getUserGoogleAuthClient(userId: string, retryCount = 0): P
     // Maximum number of retries
     const MAX_RETRIES = 2;
     
+    logWithTimestamp('OAuth', 'getOrRefresh', `Getting or refreshing OAuth token for user ${userId}`);
+    
     // Check if we have a cached client that's still valid
     const cachedClient = clientCache[userId];
     if (cachedClient && Date.now() - cachedClient.timestamp < CLIENT_CACHE_TTL) {
-      return cachedClient.client;
+      // Validate cached client credentials
+      if (cachedClient.client && 
+          cachedClient.client.credentials && 
+          cachedClient.client.credentials.access_token) {
+        logWithTimestamp('OAuth', 'cache', `Using cached client for user ${userId}`);
+        return cachedClient.client;
+      } else {
+        // Invalid cached client, remove it
+        logWithTimestamp('OAuth', 'cache', `Removing invalid cached client for user ${userId}`);
+        delete clientCache[userId];
+      }
     }
     
     // Try to get token from our central getOrRefreshGoogleToken function
     const accessToken = await getOrRefreshGoogleToken(userId);
+    
+    // Verify we have a valid token
+    if (!accessToken) {
+      throw new Error(`Failed to get access token for user ${userId}`);
+    }
     
     // Create OAuth2 client with the appropriate credentials
     const oauth2Client = new google.auth.OAuth2(
@@ -382,6 +399,18 @@ export async function getUserGoogleAuthClient(userId: string, retryCount = 0): P
     // Set credentials using the access token
     oauth2Client.setCredentials({
       access_token: accessToken
+    });
+    
+    // Verify the credentials were set correctly
+    if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
+      throw new Error(`Failed to set credentials correctly for user ${userId}`);
+    }
+    
+    // Log successful client creation
+    logWithTimestamp('OAuth', 'success', `Created new OAuth client for user ${userId}`, {
+      hasCredentials: !!oauth2Client.credentials,
+      hasAccessToken: !!oauth2Client.credentials.access_token,
+      tokenLength: oauth2Client.credentials.access_token?.length || 0
     });
     
     // Cache the client

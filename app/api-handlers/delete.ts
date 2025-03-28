@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { googleDriveService } from '@/lib/GoogleDriveService';
 import { log, generateRequestId } from '@/lib/logging';
-import { requireAuth } from '@/lib/server/auth';
+import { requireAuth, tryRefreshSession } from '@/lib/server/auth';
 
 /**
  * Handle delete requests
@@ -12,8 +12,24 @@ export async function deleteItem(request: NextRequest) {
     log('delete', 'info', 'Delete API called', { requestId });
 
     try {
+        // Log request details for debugging
+        log('delete', 'debug', 'Request details', {
+            requestId,
+            method: request.method,
+            url: request.url,
+            headers: Array.from(request.headers.entries())
+                .filter(([key]) => !key.toLowerCase().includes('cookie'))
+                .reduce((obj, [key, value]) => {
+                    obj[key] = value;
+                    return obj;
+                }, {} as Record<string, string>)
+        });
+
         // Use requireAuth which will throw a 401 response if not authenticated
         const userId = await requireAuth(requestId);
+        
+        // For delete routes, try to refresh the session token to ensure it's fresh
+        await tryRefreshSession(requestId);
         
         log('delete', 'info', 'User authenticated', { requestId, userId });
 

@@ -93,16 +93,51 @@ export async function uploadForm(request: NextRequest) {
 
         // Get form data
         const formData = await request.formData();
+        
+        // Log all keys in the FormData (excluding actual file content)
+        const formDataKeys = Array.from(formData.keys());
+        log('upload', 'debug', 'Form data keys received', {
+            requestId,
+            formDataKeys,
+            contentTypes: {
+                video: formData.get('video') instanceof Blob ? (formData.get('video') as Blob).type : 'not-a-blob',
+                thumbnail: formData.get('thumbnail') instanceof Blob ? (formData.get('thumbnail') as Blob).type : 'not-a-blob'
+            }
+        });
+        
+        // Log values of non-file fields for debugging
+        const formDataValues: Record<string, any> = {};
+        formDataKeys.forEach(key => {
+            const value = formData.get(key);
+            if (!(value instanceof Blob) && value !== null) {
+                formDataValues[key] = value;
+            } else if (value instanceof Blob) {
+                formDataValues[key] = {
+                    type: value.type,
+                    size: value.size,
+                    isBlob: true
+                };
+            }
+        });
+        
+        log('upload', 'debug', 'Form data values (non-file)', {
+            requestId,
+            formDataValues
+        });
+        
         const recordingId = formData.get('recordingId') as string;
         const performanceId = formData.get('performanceId') as string;
         const performanceTitle = formData.get('performanceTitle') as string;
         const videoBlob = formData.get('video') as Blob;
         const thumbnailBlob = formData.get('thumbnail') as Blob | null;
         
-        log('upload', 'info', 'Form data received', {
+        log('upload', 'info', 'Form data extracted', {
             requestId,
             hasVideo: !!videoBlob,
+            videoSize: videoBlob ? videoBlob.size : 0,
+            videoType: videoBlob ? videoBlob.type : 'none',
             hasThumbnail: !!thumbnailBlob,
+            thumbnailSize: thumbnailBlob ? thumbnailBlob.size : 0,
             recordingId,
             performanceId
         });
@@ -116,12 +151,14 @@ export async function uploadForm(request: NextRequest) {
                 metadata = JSON.parse(metadataString);
                 log('upload', 'info', 'Parsed metadata from JSON string', {
                     requestId,
-                    metadataKeys: Object.keys(metadata)
+                    metadataKeys: Object.keys(metadata),
+                    metadataContent: metadata // Log full metadata content
                 });
             } catch (error) {
                 log('upload', 'error', 'Failed to parse metadata JSON', {
                     requestId,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: error instanceof Error ? error.message : String(error),
+                    metadataString: metadataString // Log the raw string that failed to parse
                 });
                 
                 return NextResponse.json(
@@ -145,7 +182,8 @@ export async function uploadForm(request: NextRequest) {
             
             log('upload', 'info', 'Collected metadata from individual fields', {
                 requestId,
-                metadataKeys: Object.keys(metadata)
+                metadataKeys: Object.keys(metadata),
+                metadataContent: metadata // Log full metadata content
             });
         }
 
@@ -190,6 +228,18 @@ export async function uploadForm(request: NextRequest) {
                 userId,
                 uploadTime: new Date().toISOString()
             };
+            
+            // Log the parameters being passed to GoogleDriveService.uploadFile
+            log('upload', 'debug', 'Calling GoogleDriveService.uploadFile with parameters', {
+                requestId,
+                userId,
+                videoBlobSize: videoBlob.size,
+                videoBlobType: videoBlob.type,
+                thumbnailExists: !!thumbnailBlob,
+                thumbnailBlobSize: thumbnailBlob ? thumbnailBlob.size : 0,
+                thumbnailBlobType: thumbnailBlob ? thumbnailBlob.type : 'none',
+                completeMetadata
+            });
 
             // Upload to Google Drive using the userId
             const result = await googleDriveService.uploadFile(
@@ -198,6 +248,16 @@ export async function uploadForm(request: NextRequest) {
                 completeMetadata,
                 thumbnailBlob || undefined
             );
+            
+            // Log detailed result information
+            log('upload', 'debug', 'Google Drive upload result details', {
+                requestId,
+                resultSuccess: result.success,
+                resultFileId: result.fileId,
+                resultFileName: result.fileName,
+                resultThumbnailId: result.thumbnailId,
+                hasWebViewLink: !!result.webViewLink
+            });
 
             log('upload', 'info', 'Upload successful', {
                 requestId,

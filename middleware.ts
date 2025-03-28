@@ -56,7 +56,9 @@ const isPublicRoute = createRouteMatcher([
   '/api/auth/google-callback',  // Make OAuth callback public
   '/api/auth/refresh-session',  // Allow session refresh without auth
   '/api/auth/google-status',    // Make Google status check public
-  '/api/auth/google-reconnect'  // Make reconnection endpoint public
+  '/api/auth/google-reconnect',  // Make reconnection endpoint public
+  '/api/drive/test',  // Make Google Drive test endpoint public for debugging
+  '/api/auth/google-scopes'  // Make Google scopes test endpoint public
 ]);
 
 // Checks if a request is for an API route
@@ -247,7 +249,7 @@ export default clerkMiddleware((auth, req) => {
     logWithTimestamp('AUTH', `Public route accessed: ${path}`, { requestId });
   }
 }, {
-  debug: process.env.NODE_ENV === 'development' // Only enable debug in development
+  debug: true // Always enable debug mode, regardless of environment
 });
 
 // Stop the middleware from running on static files

@@ -25,7 +25,9 @@ interface FolderInfo {
 
 interface DriveMetadata {
     performanceId?: string;
+    performanceTitle?: string;
     rehearsalId?: string;
+    rehearsalTitle?: string;
     recordingId?: string;
     title?: string;
     description?: string;
@@ -316,48 +318,134 @@ export class GoogleDriveService {
         thumbnail?: Blob
     ): Promise<FileUploadResult> {
         try {
-            this.logOperation('start', 'Uploading file to Google Drive (Blob)', { userId });
+            this.logOperation('start', 'Uploading file to Google Drive (Blob)', { 
+                userId,
+                metadata: {
+                    performanceId: metadata.performanceId,
+                    performanceTitle: metadata.performanceTitle || metadata.title,
+                    rehearsalId: metadata.rehearsalId,
+                    rehearsalTitle: metadata.rehearsalTitle,
+                    recordingId: metadata.recordingId,
+                    recordingTitle: metadata.title
+                }
+            });
 
             // Get OAuth client for this user
             const oauth2Client = await getUserGoogleAuthClient(userId);
-            const drive = google.drive({ version: 'v3', auth: oauth2Client });
+            
+            // Validate OAuth client
+            if (!oauth2Client) {
+                throw new Error('AUTH_CLIENT_NULL: Failed to get Google OAuth client');
+            }
+            
+            if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
+                this.logOperation('error', 'Invalid OAuth client credentials', {
+                    hasCredentials: !!oauth2Client.credentials,
+                    hasAccessToken: oauth2Client.credentials ? !!oauth2Client.credentials.access_token : false
+                });
+                throw new Error('AUTH_CREDENTIALS_INVALID: Google OAuth credentials are invalid or missing access token');
+            }
+
+            // Extract access token directly for backup use if drive.auth is later null
+            const accessToken = oauth2Client.credentials.access_token;
+            
+            // Store the token for emergency recovery in case drive.auth is lost
+            const recoveryAuth = {
+                userId,
+                accessToken,
+                tokenTimestamp: Date.now()
+            };
+
+            // Use type assertion to access the Drive object properly
+            const drive = google.drive({ version: 'v3', auth: oauth2Client }) as any;
+            
+            // Enhance the drive object by attaching recovery information
+            // This is a non-standard property but will be available during the recovery process
+            // if drive.auth gets lost or becomes undefined
+            try {
+                drive.__recoveryAuth = recoveryAuth;
+                
+                // Also ensure drive.auth is properly set
+                if (!drive.auth) {
+                    this.logOperation('warning', 'Drive auth property missing after initialization, setting manually', {
+                        hadAuth: false
+                    });
+                    drive.auth = oauth2Client;
+                }
+                
+                this.logOperation('debug', 'Added recovery auth to drive object', {
+                    hasRecoveryAuth: !!drive.__recoveryAuth,
+                    recoveryAuthTokenLength: drive.__recoveryAuth?.accessToken?.length
+                });
+            } catch (e) {
+                this.logOperation('warning', 'Failed to attach recovery auth to drive object', {
+                    error: e instanceof Error ? e.message : String(e)
+                });
+            }
+            
+            // Validate drive object
+            if (!drive) {
+                throw new Error('DRIVE_OBJECT_NULL: Failed to initialize Google Drive client');
+            }
 
             // Create a root folder for the app if it doesn't exist
             this.logOperation('progress', 'Ensuring root folder exists');
             const rootFolderId = await this.ensureRootFolder(drive);
 
+            // Get the performance title from metadata
+            // First look for specific performanceTitle field, then fall back to title, then use default
+            const performanceTitle = metadata.performanceTitle || metadata.title || 'Untitled Performance';
+            const performanceId = metadata.performanceId || 'default';
+            
             // Create a folder for this performance if needed
-            this.logOperation('progress', 'Ensuring performance folder exists');
+            this.logOperation('progress', `Ensuring performance folder exists: ${performanceTitle}`);
             const performanceFolderId = await this.ensurePerformanceFolder(
                 drive,
                 rootFolderId,
-                metadata.performanceId || 'default',
-                metadata.title || 'Untitled Performance'
+                performanceId,
+                performanceTitle
+            );
+
+            // Get the rehearsal title from metadata
+            const rehearsalTitle = metadata.rehearsalTitle || `Rehearsal ${new Date().toLocaleDateString()}`;
+            const rehearsalId = metadata.rehearsalId || 'default-rehearsal';
+            
+            // Create a folder for this rehearsal if needed
+            this.logOperation('progress', `Ensuring rehearsal folder exists: ${rehearsalTitle}`);
+            const rehearsalFolderId = await this.ensureRehearsalFolder(
+                drive,
+                performanceFolderId,
+                rehearsalId,
+                rehearsalTitle
             );
 
             // Prepare file name with basic metadata
-            const fileName = `${metadata.title || 'Recording'} - ${metadata.time || new Date().toLocaleTimeString()}`;
+            const fileName = metadata.title || `Recording ${new Date().toLocaleTimeString()}`;
 
-            // Upload the main file
-            this.logOperation('progress', `Uploading file "${fileName}"`);
-            const fileId = await this.uploadFileToFolder(
+            // Upload the main file - pass userId as a fallback mechanism for authentication recovery
+            this.logOperation('progress', `Uploading file "${fileName}" to rehearsal folder`);
+            const fileId = await this.uploadFileWithRecovery(
                 drive,
                 file,
-                performanceFolderId,
+                rehearsalFolderId, // Use rehearsal folder as parent
                 fileName,
-                file.type || 'video/mp4'
+                file.type || 'video/mp4',
+                userId,
+                accessToken
             );
 
             // Upload the thumbnail if available
             let thumbnailId;
             if (thumbnail) {
                 this.logOperation('progress', 'Uploading thumbnail');
-                thumbnailId = await this.uploadFileToFolder(
+                thumbnailId = await this.uploadFileWithRecovery(
                     drive,
                     thumbnail,
-                    performanceFolderId,
+                    rehearsalFolderId, // Use rehearsal folder as parent
                     `${fileName} - Thumbnail`,
-                    thumbnail.type || 'image/jpeg'
+                    thumbnail.type || 'image/jpeg',
+                    userId,
+                    accessToken
                 );
             }
 
@@ -370,7 +458,13 @@ export class GoogleDriveService {
             // Get the web view link
             const webViewLink = await this.getFileWebViewLink(drive, fileId);
 
-            this.logOperation('success', `File uploaded successfully with ID: ${fileId}`);
+            this.logOperation('success', `File uploaded successfully with ID: ${fileId}`, {
+                performanceTitle,
+                rehearsalTitle,
+                fileName,
+                hierarchyPath: `${performanceTitle}/${rehearsalTitle}/${fileName}`
+            });
+            
             return {
                 success: true,
                 fileId,
@@ -448,53 +542,263 @@ export class GoogleDriveService {
     // PRIVATE METHODS
 
     /**
-     * Upload a file to a specific folder using fetch API (for binary uploads)
+     * Helper method for logging operations with timestamps and structured data
+     */
+    private logOperation(level: 'start' | 'progress' | 'success' | 'error' | 'info' | 'debug' | 'warning', message: string, data?: any): void {
+        const timestamp = new Date().toISOString();
+        const prefix = `[${timestamp}][GoogleDriveService][${level.toUpperCase()}]`;
+        
+        // For important levels, always log with data
+        if (['error', 'start', 'success', 'warning'].includes(level)) {
+            console.log(`${prefix} ${message}`, data ? JSON.stringify(data, null, 2) : '');
+        } else {
+            // For less important levels, only log data if debugging is enabled
+            const isDebugMode = process.env.DEBUG?.includes('google') || process.env.DEBUG === '*';
+            console.log(`${prefix} ${message}`, isDebugMode && data ? JSON.stringify(data, null, 2) : '');
+        }
+        
+        // Additional error tracking for improved diagnostics
+        if (level === 'error') {
+            try {
+                if (typeof data === 'object' && data !== null) {
+                    // Extract Google API error details if available
+                    const googleError = data.response?.data?.error;
+                    if (googleError) {
+                        console.error(`${prefix} Google API Error:`, {
+                            code: googleError.code,
+                            status: googleError.status,
+                            message: googleError.message,
+                            errors: googleError.errors
+                        });
+                    }
+                    
+                    // Check for OAuth specific errors
+                    if (data.response?.status === 401) {
+                        console.error(`${prefix} OAuth Authorization Error: Token might be invalid or expired`);
+                    } else if (data.response?.status === 403) {
+                        console.error(`${prefix} OAuth Permission Error: Insufficient permissions or scope`);
+                    }
+                }
+            } catch (loggingError) {
+                console.error(`${prefix} Error processing error details:`, loggingError);
+            }
+        }
+    }
+
+    /**
+     * Enhanced version of uploadFileToFolder with recovery mechanisms
      * @param drive - Google Drive API object
      * @param blob - File contents as Blob
      * @param folderId - Target folder ID
      * @param name - File name
      * @param mimeType - MIME type of the file
+     * @param userId - User ID for recovery (used if drive.auth is lost)
+     * @param fallbackToken - Access token for fallback authentication
      * @returns ID of the uploaded file
      */
-    private async uploadFileToFolder(
+    private async uploadFileWithRecovery(
         drive: any,
         blob: Blob,
         folderId: string,
         name: string,
-        mimeType: string
+        mimeType: string,
+        userId?: string,
+        fallbackToken?: string
     ): Promise<string> {
-        const metadata = {
-            name: name,
-            mimeType: mimeType,
-            parents: [folderId]
-        };
+        try {
+            this.logOperation('start', 'Starting uploadFileWithRecovery operation', {
+                name,
+                mimeType,
+                folderId,
+                blobSize: blob.size,
+                blobType: blob.type,
+                hasUserId: !!userId,
+                hasFallbackToken: !!fallbackToken
+            });
 
-        // Create a multi-part request for both metadata and file content
-        const form = new FormData();
-        form.append(
-            'metadata',
-            new Blob([JSON.stringify(metadata)], { type: 'application/json' })
-        );
-        form.append('file', blob);
-
-        const response = await fetch(
-            'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-            {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${drive.auth.credentials.access_token}`
-                },
-                body: form
+            // Ensure folderId is valid and verify it's a string
+            if (!folderId || typeof folderId !== 'string') {
+                throw new Error(`DRIVE_INVALID_FOLDER: Invalid folder ID: ${folderId}`);
             }
-        );
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to upload file: ${response.status} ${errorText}`);
+            // Validate drive object 
+            if (!drive) {
+                throw new Error('DRIVE_OBJECT_NULL: Google Drive API object is null or undefined');
+            }
+
+            // Get access token, with multiple fallback mechanisms
+            let accessToken: string | undefined;
+            
+            // Try to get token from drive object first (standard path)
+            if (drive.auth && drive.auth.credentials && drive.auth.credentials.access_token) {
+                accessToken = drive.auth.credentials.access_token;
+                // Since we just assigned accessToken and checked it's not undefined, we can safely assert it as string
+                const token = accessToken as string;
+                this.logOperation('debug', 'Retrieved access token from drive object', {
+                    tokenLength: token.length
+                });
+            } 
+            // Try recovery auth property we attached earlier
+            else if ((drive as any).__recoveryAuth && (drive as any).__recoveryAuth.accessToken) {
+                accessToken = (drive as any).__recoveryAuth.accessToken;
+                // Since we just assigned accessToken and checked it's not undefined, we can safely assert it as string
+                const token = accessToken as string;
+                this.logOperation('debug', 'Retrieved access token from recovery property', {
+                    tokenLength: token.length,
+                    recoveryAuthAge: Date.now() - ((drive as any).__recoveryAuth.tokenTimestamp || 0)
+                });
+            }
+            // Use the fallback token passed directly (most reliable)
+            else if (fallbackToken) {
+                accessToken = fallbackToken;
+                // Fallback token is guaranteed to be defined here
+                const token = accessToken as string;
+                this.logOperation('debug', 'Using fallback access token', {
+                    tokenLength: token.length
+                });
+            }
+            // If we have userId, try to get a fresh token (last resort)
+            else if (userId) {
+                try {
+                    this.logOperation('warning', 'All token recovery methods failed, getting fresh token', {
+                        userId
+                    });
+                    const oauth2Client = await getUserGoogleAuthClient(userId);
+                    if (oauth2Client && oauth2Client.credentials && oauth2Client.credentials.access_token) {
+                        accessToken = oauth2Client.credentials.access_token;
+                        // Fresh token is guaranteed to be defined here
+                        const token = accessToken as string;
+                        this.logOperation('debug', 'Retrieved fresh token for recovery', {
+                            tokenLength: token.length
+                        });
+                    }
+                } catch (tokenError) {
+                    this.logOperation('error', 'Failed to get fresh token for recovery', {
+                        error: tokenError instanceof Error ? tokenError.message : String(tokenError)
+                    });
+                }
+            }
+            
+            // If all methods failed, we can't proceed
+            if (!accessToken) {
+                throw new Error('DRIVE_AUTH_MISSING: Google Drive API object missing valid auth. Try reconnecting your Google account.');
+            }
+            
+            // From this point on, accessToken is guaranteed to be a string (not undefined)
+            // because we've thrown an error if it's undefined
+            const token = accessToken;
+            
+            // Log what we have now
+            this.logOperation('debug', 'Proceeding with upload using access token', {
+                hasAccessToken: true,
+                tokenLength: token.length,
+                folderId
+            });
+
+            const metadata = {
+                name: name,
+                mimeType: mimeType,
+                parents: [folderId] // Ensure parents is an array of strings, not an array of objects
+            };
+
+            // Log metadata being sent
+            this.logOperation('debug', 'Preparing metadata for upload', {
+                metadata: JSON.stringify(metadata),
+                blobSizeBytes: blob.size
+            });
+
+            // Create a multi-part request for both metadata and file content
+            const form = new FormData();
+            form.append(
+                'metadata',
+                new Blob([JSON.stringify(metadata)], { type: 'application/json' })
+            );
+            form.append('file', blob);
+            
+            this.logOperation('debug', 'Sending multipart upload request', {
+                uploadUrl: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+                hasAccessToken: true,
+                accessTokenLength: token.length,
+                formDataParts: ['metadata', 'file']
+            });
+
+            try {
+                const response = await fetch(
+                    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+                    {
+                        method: 'POST',
+                        headers: {
+                            Authorization: `Bearer ${token}`
+                        },
+                        body: form
+                    }
+                );
+
+                // Log response status and headers
+                const responseHeaders: Record<string, string> = {};
+                response.headers.forEach((value, key) => {
+                    responseHeaders[key] = value;
+                });
+
+                this.logOperation('debug', 'Received upload response', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: responseHeaders
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    this.logOperation('error', 'Upload failed with error response', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        errorText: errorText
+                    });
+                    
+                    // Handle specific error cases
+                    if (response.status === 403) {
+                        throw new Error('DRIVE_PERMISSION_DENIED: Cannot upload files. Check app permissions.');
+                    } else if (response.status === 401) {
+                        throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                    } else if (response.status === 404) {
+                        throw new Error(`DRIVE_FOLDER_NOT_FOUND: Upload folder ${folderId} not found.`);
+                    } else if (errorText.includes('userRateLimitExceeded')) {
+                        throw new Error('DRIVE_RATE_LIMIT: Too many requests to Google Drive. Please try again later.');
+                    } else if (errorText.includes('storageQuotaExceeded')) {
+                        throw new Error('DRIVE_QUOTA_EXCEEDED: Google Drive storage is full. Please free up space.');
+                    } else {
+                        throw new Error(`Failed to upload file: ${response.status} ${errorText}`);
+                    }
+                }
+
+                const data = await response.json();
+                this.logOperation('success', 'File uploaded successfully', {
+                    fileId: data.id,
+                    fileName: data.name,
+                    responseData: data
+                });
+
+                return data.id;
+            } catch (fetchError: unknown) {
+                // Handle network-level errors (not API errors)
+                if (fetchError instanceof Error && fetchError.message.includes('fetch')) {
+                    this.logOperation('error', 'Network error during upload', {
+                        errorMessage: fetchError.message
+                    });
+                    throw new Error('DRIVE_NETWORK_ERROR: Network problem during upload. Check internet connection.');
+                }
+                
+                // Re-throw the error (could be our custom errors from above or other errors)
+                throw fetchError;
+            }
+        } catch (error) {
+            this.logOperation('error', `Failed in uploadFileWithRecovery: ${(error as Error).message}`, {
+                error: error,
+                name: name,
+                folderId: folderId,
+                errorStack: (error as Error).stack
+            });
+            throw error;
         }
-
-        const data = await response.json();
-        return data.id;
     }
 
     /**
@@ -504,31 +808,111 @@ export class GoogleDriveService {
      */
     private async ensureRootFolder(drive: any): Promise<string> {
         try {
+            // Log the start of the operation
+            this.logOperation('start', 'Starting ensureRootFolder operation', {
+                rootFolderName: this.ROOT_FOLDER_NAME
+            });
+
             // Check if the folder already exists
-            const response = await drive.files.list({
-                q: `name='${this.ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            const query = `name='${this.ROOT_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+            this.logOperation('debug', 'Checking if root folder exists', {
+                query,
                 fields: 'files(id, name)'
             });
 
-            // If folder exists, return its ID
-            if (response.data.files && response.data.files.length > 0) {
-                this.logOperation('info', `Root folder "${this.ROOT_FOLDER_NAME}" already exists`);
-                return response.data.files[0].id;
+            try {
+                const response = await drive.files.list({
+                    q: query,
+                    fields: 'files(id, name)'
+                });
+
+                // Log the files.list response
+                this.logOperation('debug', 'Response from files.list for root folder', {
+                    filesCount: response.data.files?.length || 0,
+                    firstFile: response.data.files?.[0] || null,
+                    responseStatus: response.status
+                });
+
+                // If folder exists, return its ID
+                if (response.data.files && response.data.files.length > 0) {
+                    this.logOperation('info', `Root folder "${this.ROOT_FOLDER_NAME}" already exists`, {
+                        folderId: response.data.files[0].id,
+                        folderName: response.data.files[0].name
+                    });
+                    return response.data.files[0].id;
+                }
+            } catch (listError) {
+                const status = (listError as any)?.response?.status;
+                const errorDetails = (listError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error listing root folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (listError as Error).message
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot access Drive files. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw listError;
             }
 
             // If folder doesn't exist, create it
-            this.logOperation('info', `Creating root folder "${this.ROOT_FOLDER_NAME}"`);
-            const createResponse = await drive.files.create({
-                requestBody: {
-                    name: this.ROOT_FOLDER_NAME,
-                    mimeType: 'application/vnd.google-apps.folder'
-                },
+            this.logOperation('info', `Creating root folder "${this.ROOT_FOLDER_NAME}"`, {
+                folderName: this.ROOT_FOLDER_NAME,
+                mimeType: 'application/vnd.google-apps.folder',
                 fields: 'id'
             });
 
-            return createResponse.data.id;
+            try {
+                const createResponse = await drive.files.create({
+                    requestBody: {
+                        name: this.ROOT_FOLDER_NAME,
+                        mimeType: 'application/vnd.google-apps.folder'
+                    },
+                    fields: 'id'
+                });
+
+                // Log the files.create response
+                this.logOperation('success', `Root folder "${this.ROOT_FOLDER_NAME}" created successfully`, {
+                    folderId: createResponse.data.id,
+                    responseStatus: createResponse.status
+                });
+
+                return createResponse.data.id;
+            } catch (createError) {
+                const status = (createError as any)?.response?.status;
+                const errorDetails = (createError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error creating root folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (createError as Error).message
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot create folders. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'userRateLimitExceeded')) {
+                    throw new Error('DRIVE_RATE_LIMIT: Too many requests to Google Drive. Please try again later.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'storageQuotaExceeded')) {
+                    throw new Error('DRIVE_QUOTA_EXCEEDED: Google Drive storage is full. Please free up space.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw createError;
+            }
         } catch (error) {
-            this.logOperation('error', `Failed to ensure root folder: ${(error as Error).message}`, error);
+            this.logOperation('error', `Failed to ensure root folder: ${(error as Error).message}`, {
+                rootFolderName: this.ROOT_FOLDER_NAME,
+                error: error,
+                errorStack: (error as Error).stack
+            });
             throw error;
         }
     }
@@ -582,34 +966,139 @@ export class GoogleDriveService {
         performanceTitle: string
     ): Promise<string> {
         try {
-            const folderName = `${performanceTitle} (${performanceId})`;
+            // Log the start of the operation
+            this.logOperation('start', 'Starting ensurePerformanceFolder operation', {
+                parentId,
+                performanceId,
+                performanceTitle
+            });
+
+            const folderName = `${performanceTitle} - (${performanceId})`;
+            this.logOperation('debug', 'Generated performance folder name', {
+                folderName,
+                performanceId,
+                performanceTitle
+            });
 
             // Check if the folder already exists
-            const response = await drive.files.list({
-                q: `name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            const query = `name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+            this.logOperation('debug', 'Checking if performance folder exists', {
+                query,
+                parentId,
+                folderName,
                 fields: 'files(id, name)'
             });
 
-            // If folder exists, return its ID
-            if (response.data.files && response.data.files.length > 0) {
-                this.logOperation('info', `Performance folder "${folderName}" already exists`);
-                return response.data.files[0].id;
+            try {
+                const response = await drive.files.list({
+                    q: query,
+                    fields: 'files(id, name)'
+                });
+
+                // Log the files.list response
+                this.logOperation('debug', 'Response from files.list for performance folder', {
+                    filesCount: response.data.files?.length || 0,
+                    firstFile: response.data.files?.[0] || null,
+                    responseStatus: response.status
+                });
+
+                // If folder exists, return its ID
+                if (response.data.files && response.data.files.length > 0) {
+                    this.logOperation('info', `Performance folder "${folderName}" already exists`, {
+                        folderId: response.data.files[0].id,
+                        folderName: response.data.files[0].name,
+                        parentId
+                    });
+                    return response.data.files[0].id;
+                }
+            } catch (listError) {
+                const status = (listError as any)?.response?.status;
+                const errorDetails = (listError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error listing performance folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (listError as Error).message,
+                    folderName
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot access Drive files. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw listError;
             }
 
             // If folder doesn't exist, create it
-            this.logOperation('info', `Creating performance folder "${folderName}"`);
-            const createResponse = await drive.files.create({
-                requestBody: {
-                    name: folderName,
-                    mimeType: 'application/vnd.google-apps.folder',
-                    parents: [parentId]
-                },
+            this.logOperation('info', `Creating performance folder "${folderName}"`, {
+                folderName,
+                mimeType: 'application/vnd.google-apps.folder',
+                parentId,
                 fields: 'id'
             });
 
-            return createResponse.data.id;
+            try {
+                // Ensure parentId is valid and verify it's a string
+                if (!parentId || typeof parentId !== 'string') {
+                    throw new Error(`DRIVE_INVALID_PARENT: Invalid parent folder ID: ${parentId}`);
+                }
+
+                const createResponse = await drive.files.create({
+                    requestBody: {
+                        name: folderName,
+                        mimeType: 'application/vnd.google-apps.folder',
+                        parents: [parentId] // Ensure parents is an array of strings
+                    },
+                    fields: 'id'
+                });
+
+                // Log the files.create response
+                this.logOperation('success', `Performance folder "${folderName}" created successfully`, {
+                    folderId: createResponse.data.id,
+                    parentId,
+                    responseStatus: createResponse.status
+                });
+
+                return createResponse.data.id;
+            } catch (createError) {
+                const status = (createError as any)?.response?.status;
+                const errorDetails = (createError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error creating performance folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (createError as Error).message,
+                    folderName,
+                    parentId
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot create folders. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'notFound')) {
+                    throw new Error(`DRIVE_PARENT_NOT_FOUND: Parent folder ${parentId} not found.`);
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'userRateLimitExceeded')) {
+                    throw new Error('DRIVE_RATE_LIMIT: Too many requests to Google Drive. Please try again later.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'storageQuotaExceeded')) {
+                    throw new Error('DRIVE_QUOTA_EXCEEDED: Google Drive storage is full. Please free up space.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw createError;
+            }
         } catch (error) {
-            this.logOperation('error', `Failed to ensure performance folder: ${(error as Error).message}`, error);
+            this.logOperation('error', `Failed to ensure performance folder: ${(error as Error).message}`, {
+                folderName: `${performanceTitle} (${performanceId})`,
+                parentId,
+                performanceId,
+                performanceTitle,
+                error: error,
+                errorStack: (error as Error).stack
+            });
             throw error;
         }
     }
@@ -672,46 +1161,154 @@ export class GoogleDriveService {
     }
 
     /**
-     * Helper method for logging operations with timestamps and structured data
+     * Ensure a folder exists for a specific rehearsal inside a performance folder
+     * @param drive - Google Drive API object
+     * @param parentId - Parent folder ID (performance folder)
+     * @param rehearsalId - Rehearsal identifier
+     * @param rehearsalTitle - Rehearsal title
+     * @returns ID of the rehearsal folder
      */
-    private logOperation(level: 'start' | 'progress' | 'success' | 'error' | 'info' | 'debug', message: string, data?: any): void {
-        const timestamp = new Date().toISOString();
-        const prefix = `[${timestamp}][GoogleDriveService][${level.toUpperCase()}]`;
-        
-        // For important levels, always log with data
-        if (['error', 'start', 'success'].includes(level)) {
-            console.log(`${prefix} ${message}`, data ? JSON.stringify(data, null, 2) : '');
-        } else {
-            // For less important levels, only log data if debugging is enabled
-            const isDebugMode = process.env.DEBUG?.includes('google') || process.env.DEBUG === '*';
-            console.log(`${prefix} ${message}`, isDebugMode && data ? JSON.stringify(data, null, 2) : '');
-        }
-        
-        // Additional error tracking for improved diagnostics
-        if (level === 'error') {
+    private async ensureRehearsalFolder(
+        drive: any,
+        parentId: string,
+        rehearsalId: string,
+        rehearsalTitle: string
+    ): Promise<string> {
+        try {
+            // Log the start of the operation
+            this.logOperation('start', 'Starting ensureRehearsalFolder operation', {
+                parentId,
+                rehearsalId,
+                rehearsalTitle
+            });
+
+            const folderName = `${rehearsalTitle} - (${rehearsalId})`;
+            this.logOperation('debug', 'Generated rehearsal folder name', {
+                folderName,
+                rehearsalId,
+                rehearsalTitle
+            });
+
+            // Check if the folder already exists
+            const query = `name='${folderName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+            this.logOperation('debug', 'Checking if rehearsal folder exists', {
+                query,
+                parentId,
+                folderName,
+                fields: 'files(id, name)'
+            });
+
             try {
-                if (typeof data === 'object' && data !== null) {
-                    // Extract Google API error details if available
-                    const googleError = data.response?.data?.error;
-                    if (googleError) {
-                        console.error(`${prefix} Google API Error:`, {
-                            code: googleError.code,
-                            status: googleError.status,
-                            message: googleError.message,
-                            errors: googleError.errors
-                        });
-                    }
-                    
-                    // Check for OAuth specific errors
-                    if (data.response?.status === 401) {
-                        console.error(`${prefix} OAuth Authorization Error: Token might be invalid or expired`);
-                    } else if (data.response?.status === 403) {
-                        console.error(`${prefix} OAuth Permission Error: Insufficient permissions or scope`);
-                    }
+                const response = await drive.files.list({
+                    q: query,
+                    fields: 'files(id, name)'
+                });
+
+                // Log the files.list response
+                this.logOperation('debug', 'Response from files.list for rehearsal folder', {
+                    filesCount: response.data.files?.length || 0,
+                    firstFile: response.data.files?.[0] || null,
+                    responseStatus: response.status
+                });
+
+                // If folder exists, return its ID
+                if (response.data.files && response.data.files.length > 0) {
+                    this.logOperation('info', `Rehearsal folder "${folderName}" already exists`, {
+                        folderId: response.data.files[0].id,
+                        folderName: response.data.files[0].name,
+                        parentId
+                    });
+                    return response.data.files[0].id;
                 }
-            } catch (loggingError) {
-                console.error(`${prefix} Error processing error details:`, loggingError);
+            } catch (listError) {
+                const status = (listError as any)?.response?.status;
+                const errorDetails = (listError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error listing rehearsal folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (listError as Error).message,
+                    folderName
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot access Drive files. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw listError;
             }
+
+            // If folder doesn't exist, create it
+            this.logOperation('info', `Creating rehearsal folder "${folderName}"`, {
+                folderName,
+                mimeType: 'application/vnd.google-apps.folder',
+                parentId,
+                fields: 'id'
+            });
+
+            try {
+                // Ensure parentId is valid and verify it's a string
+                if (!parentId || typeof parentId !== 'string') {
+                    throw new Error(`DRIVE_INVALID_PARENT: Invalid parent folder ID: ${parentId}`);
+                }
+
+                const createResponse = await drive.files.create({
+                    requestBody: {
+                        name: folderName,
+                        mimeType: 'application/vnd.google-apps.folder',
+                        parents: [parentId] // Ensure parents is an array of strings
+                    },
+                    fields: 'id'
+                });
+
+                // Log the files.create response
+                this.logOperation('success', `Rehearsal folder "${folderName}" created successfully`, {
+                    folderId: createResponse.data.id,
+                    parentId,
+                    responseStatus: createResponse.status
+                });
+
+                return createResponse.data.id;
+            } catch (createError) {
+                const status = (createError as any)?.response?.status;
+                const errorDetails = (createError as any)?.response?.data?.error;
+                
+                this.logOperation('error', 'Error creating rehearsal folder', {
+                    status,
+                    errorDetails,
+                    errorMessage: (createError as Error).message,
+                    folderName,
+                    parentId
+                });
+                
+                if (status === 403) {
+                    throw new Error('DRIVE_PERMISSION_DENIED: Cannot create folders. Check app permissions.');
+                } else if (status === 401) {
+                    throw new Error('DRIVE_AUTH_ERROR: Authentication failed. Try reconnecting your Google account.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'notFound')) {
+                    throw new Error(`DRIVE_PARENT_NOT_FOUND: Parent folder ${parentId} not found.`);
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'userRateLimitExceeded')) {
+                    throw new Error('DRIVE_RATE_LIMIT: Too many requests to Google Drive. Please try again later.');
+                } else if (errorDetails?.errors?.some((e: any) => e.reason === 'storageQuotaExceeded')) {
+                    throw new Error('DRIVE_QUOTA_EXCEEDED: Google Drive storage is full. Please free up space.');
+                }
+                
+                // Re-throw the original error if we can't categorize it
+                throw createError;
+            }
+        } catch (error) {
+            this.logOperation('error', `Failed to ensure rehearsal folder: ${(error as Error).message}`, {
+                folderName: `${rehearsalTitle} (${rehearsalId})`,
+                parentId,
+                rehearsalId,
+                rehearsalTitle,
+                error: error,
+                errorStack: (error as Error).stack
+            });
+            throw error;
         }
     }
 }

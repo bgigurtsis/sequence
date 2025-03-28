@@ -894,7 +894,14 @@ function HomePageContent() {
               {editingRehearsal ? 'Edit Rehearsal' : 'New Rehearsal'}
             </h2>
             <RehearsalForm
-              onSave={editingRehearsal ? updateRehearsal : addRehearsal}
+              onSave={(data) => {
+                if (editingRehearsal) {
+                  updateRehearsal(data);
+                } else {
+                  addRehearsal(data);
+                }
+                closeRehearsalForm();
+              }}
               onCancel={closeRehearsalForm}
               initialData={
                 editingRehearsal
@@ -905,7 +912,10 @@ function HomePageContent() {
                     }
                   : {}
               }
-              onDelete={editingRehearsal ? deleteRehearsal : undefined}
+              onDelete={editingRehearsal ? () => {
+                deleteRehearsal();
+                closeRehearsalForm();
+              } : undefined}
             />
           </div>
         </div>
